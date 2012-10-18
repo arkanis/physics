@@ -27,35 +27,71 @@ GLint vertex_buffer;
 GLint attr_pos, uni_camera, uni_transform, uni_color;
 
 typedef float mat_t[16];
+typedef struct { float x, y; } vec_t;
+typedef struct { float r, g, b, a; } color_t;
 
-typedef struct {
-	float x, y;
-} vec_t;
 
 typedef struct {
 	vec_t pos, vel, force;
-	float mass;
+	float mass, ttl;
+	color_t color;
 } entity_t, *entity_p;
+
+entity_t *entities;
+size_t entity_count;
+
 
 typedef struct {
 	vec_t pos;
 	float force;
 } attractor_t, *attractor_p;
 
+attractor_t *attractors;
+size_t attractor_count;
 
-#define ENTITY_LIMIT 100
-entity_t *entities;
-size_t entity_count; // default set by build_world()
-attractor_t attractors[3];
-vec_t cursor = {0, 0}, marker = {0, 0};
-bool cursor_active = false, marker_active = false;
-mat_t projection = {0};
+
+typedef struct {
+	vec_t pos, vel;
+	color_t color;
+	float spawn_rate;
+	float min_mass, max_mass;
+	float min_ttl, max_ttl;
+} emiter_t, *emiter_p;
+
+emiter_t *emiters;
+size_t emiter_count;
+
+
+vec_t cursor = {0, 0};
+bool cursor_active = false;
+float cursor_min_mass = 2.5, cursor_max_mass = 10;
+float cursor_width = 400, cursor_height = 300;
+float cursor_spawn_num = 2000;
 
 uint32_t cycle_duration = 1.0 / 60.0 * 1000;
 uint16_t win_w = 640, win_h = 480;
-vec_t background_force = { 0, 9.81 };
-float cursor_force = 50;
-float mass;
+
+mat_t projection = {0};
+vec_t cam_pos = {0, 0};
+float cam_zoom = 0;
+bool cam_moving = 0;
+
+
+void make_camera(uint16_t window_width, uint16_t window_height){
+	// Build projection matrix, details taken from glOrtho documentation
+	float l = 0, r = window_width, t = 0, b = window_height, n = -1, f = 1;
+	float tx = -(r + l) / (r - l), ty = -(t + b) / (t - b), tz = -(f + n) / (f - n);
+	float s = powf(10, cam_zoom);
+	glUniformMatrix4fv(uni_camera, 1, GL_TRUE, (float[16]){
+		2 / (r-l) * s, 0, 0, tx + cam_pos.x,
+		0, 2 / (t-b) * s, 0, ty + cam_pos.y,
+		0, 0, -2 / (f - n), tz,
+		0, 0, 0, 1
+	});
+	glGetUniformfv(prog, uni_camera, projection);
+	
+	//printf("cam zoom: %f, s: %f\n", cam_zoom, powf(10, cam_zoom));
+}
 
 
 GLint load_shader(GLenum shader_type, const char *filename){
@@ -170,17 +206,7 @@ void renderer_init(uint16_t window_width, uint16_t window_height, const char *ti
 	glEnableVertexAttribArray(attr_pos);
 	glClearColor(0.2, 0.2, 0.2, 1.0);
 	
-	
-	// Build projection matrix, details taken from glOrtho documentation
-	float l = 0, r = window_width, t = 0, b = window_height, n = -1, f = 1;
-	float tx = -(r + l) / (r - l), ty = -(t + b) / (t - b), tz = -(f + n) / (f - n);
-	glUniformMatrix4fv(uni_camera, 1, GL_TRUE, (float[16]){
-		2 / (r-l), 0, 0, tx,
-		0, 2 / (t-b), 0, ty,
-		0, 0, -2 / (f - n), tz,
-		0, 0, 0, 1
-	});
-	glGetUniformfv(prog, uni_camera, projection);
+	make_camera(window_width, window_height);
 }
 
 void renderer_shutdown(){
@@ -194,7 +220,8 @@ void renderer_shutdown(){
 
 void build_world(){
 	srand(9);
-	entity_count = 10000;
+	
+	entity_count = 2500;
 	entities = realloc(entities, sizeof(entity_t) * entity_count);
 	for(size_t i = 0; i < entity_count; i++){
 		entities[i].pos.x = (rand() / (float)RAND_MAX) * 500;
@@ -202,31 +229,59 @@ void build_world(){
 		entities[i].vel = (vec_t){0, 0};
 		entities[i].force = (vec_t){0, 0};
 		entities[i].mass = (rand() / (float)RAND_MAX) * 7.5 + 2.5;
+		entities[i].color = (color_t){0, 1, 0, 0.5};
+		entities[i].ttl = (rand() / (float)RAND_MAX) * 25.0 + 5.0;
 	}
 	
-	for(size_t i = 0; i < 3; i++){
+	attractor_count = 3;
+	attractors = realloc(attractors, sizeof(attractor_t) * attractor_count);
+	for(size_t i = 0; i < attractor_count; i++){
 		attractors[i].pos.x = (win_w / 4) + (rand() / (float)RAND_MAX) * (win_w / 2);
 		attractors[i].pos.y = (win_h / 4) + (rand() / (float)RAND_MAX) * (win_h / 2);
 		attractors[i].force = (rand() / (float)RAND_MAX) * 25000 + 10000;
 	}
+	
+	emiter_count = 1;
+	emiters = realloc(emiters, sizeof(emiter_t) * emiter_count);
+	emiters[0] = (emiter_t){
+		.pos = (vec_t){10, 10},
+		.vel = (vec_t){10, 10},
+		.color = (color_t){1, 0, 0, 0.5},
+		.spawn_rate = 75,
+		.min_mass = 2.5, .max_mass = 10,
+		.min_ttl = 10, .max_ttl = 25
+	};
 }
 
 void simulate(float dt){
-	for(size_t i = 0; i < entity_count; i++){
-		entities[i].force = (vec_t){0, 0};
-		//entities[i].force = background_force;
+	// Emit new entities
+	for(size_t i = 0; i < emiter_count; i++){
+		emiter_p em = emiters + i;
+		size_t to_spawn_count = em->spawn_rate / cycle_duration;
 		
-		if (cursor_active){
-			vec_t to_center = (vec_t){
-				cursor.x - entities[i].pos.x,
-				cursor.y - entities[i].pos.y
+		entities = realloc(entities, sizeof(entity_t) * (entity_count + to_spawn_count));
+		for(size_t j = entity_count; j < entity_count + to_spawn_count; j++){
+			entities[j] = (entity_t){
+				.pos = (vec_t){
+					.x = em->pos.x + (rand() / (float)RAND_MAX) * 100 - 50,
+					.y = em->pos.y + (rand() / (float)RAND_MAX) * 100 - 50
+				},
+				.vel = em->vel,
+				.force = (vec_t){0, 0},
+				.mass = em->min_mass + (rand() / (float)RAND_MAX) * (em->max_mass - em->min_mass),
+				.color = em->color,
+				.ttl = em->min_ttl + (rand() / (float)RAND_MAX) * (em->max_ttl - em->min_ttl)
 			};
-			float length = sqrtf(to_center.x*to_center.x + to_center.y*to_center.y);
-			entities[i].force.x += to_center.x / length * cursor_force;
-			entities[i].force.y += to_center.y / length * cursor_force;
 		}
 		
-		for(size_t j = 0; j < 3; j++){
+		entity_count += to_spawn_count;
+	}
+	
+	// Apply attractor forces to each entity
+	for(size_t i = 0; i < entity_count; i++){
+		entities[i].force = (vec_t){0, 0};
+		
+		for(size_t j = 0; j < attractor_count; j++){
 			vec_t to_attractor = (vec_t){
 				attractors[j].pos.x - entities[i].pos.x,
 				attractors[j].pos.y - entities[i].pos.y
@@ -239,29 +294,40 @@ void simulate(float dt){
 		}
 	}
 	
-	for(size_t i = 0; i < entity_count; i++){
+	// Advance entities
+	ssize_t life_i = -1; // index of least alive entity
+	for(entity_p e = entities; e < entities + entity_count; e++){
+		e->ttl -= dt;
+		if (e->ttl < 0)
+			continue;
+		life_i++;
+		
 		/*
 		a = f / m;
 		v = v + a*dt;
 		s = s + v*dt;
 		*/
 		vec_t acl;
-		acl.x = entities[i].force.x / entities[i].mass;
-		acl.y = entities[i].force.y / entities[i].mass;
-		entities[i].vel.x += acl.x * dt;
-		entities[i].vel.y += acl.y * dt;
-		entities[i].pos.x += entities[i].vel.x * dt;
-		entities[i].pos.y += entities[i].vel.y * dt;
+		acl.x = e->force.x / e->mass;
+		acl.y = e->force.y / e->mass;
+		e->vel.x += acl.x * dt;
+		e->vel.y += acl.y * dt;
+		e->pos.x += e->vel.x * dt;
+		e->pos.y += e->vel.y * dt;
+		
+		entities[life_i] = *e;
 	}
 	
-	
+	// Clean up old particles with a time to live < 0
+	entity_count = life_i + 1;
+	entities = realloc(entities, sizeof(entity_t) * entity_count);
 }
 
 void draw(){
 	glClear(GL_COLOR_BUFFER_BIT);
 	
 	float attractor_scale = 250;
-	for(size_t i = 0; i < 3; i++){
+	for(size_t i = 0; i < attractor_count; i++){
 		glUniform4f(uni_color, 0, 0, 1, 0.25);
 		glUniformMatrix4fv(uni_transform, 1, GL_TRUE, (float[]){
 			attractors[i].force / attractor_scale, 0, 0, attractors[i].pos.x,
@@ -286,11 +352,25 @@ void draw(){
 			0, 0, 0, 1
 		});
 		
-		glUniform4f(uni_color, 1, 0, 0, 0.5);
+		glUniform4f(uni_color, entities[i].color.r, entities[i].color.g, entities[i].color.b, entities[i].color.a);
 		glVertexAttribPointer(attr_pos, 3, GL_FLOAT, GL_FALSE, sizeof(float)*3, 0);
 		glDrawArrays(GL_QUADS, 0, 4);
 	}
 	
+	float emiter_scale = 20;
+	for(size_t i = 0; i < emiter_count; i++){
+		glUniform4f(uni_color, 1, 1, 1, 0.5);
+		glUniformMatrix4fv(uni_transform, 1, GL_TRUE, (float[]){
+			emiter_scale, 0, 0, emiters[i].pos.x,
+			0, emiter_scale, 0, emiters[i].pos.y,
+			0, 0, emiter_scale, 0,
+			0, 0, 0, 1
+		});
+		glVertexAttribPointer(attr_pos, 3, GL_FLOAT, GL_FALSE, sizeof(float)*3, 0);
+		glDrawArrays(GL_QUADS, 0, 4);
+	}
+	
+	/*
 	if (marker_active){
 		glUniformMatrix4fv(uni_transform, 1, GL_TRUE, (float[]){
 			mass, 0, 0, marker.x,
@@ -302,6 +382,7 @@ void draw(){
 		glUniform4f(uni_color, 1, 0, 0, 0.25);
 		glDrawArrays(GL_QUADS, 0, 4);
 	}
+	*/
 	
 	if (cursor_active){
 		glUniformMatrix4fv(uni_transform, 1, GL_TRUE, (float[]){
@@ -359,6 +440,13 @@ int main(int argc, char **argv){
 				case SDL_MOUSEMOTION:
 					cursor.x = (float)e.motion.x; // / win_w * 2.0 - 1.0;
 					cursor.y = (float)e.motion.y; // / win_h * -2.0 + 1.0;
+					
+					if (cam_moving){
+						cam_pos.x += e.motion.xrel / 100.0;
+						cam_pos.y += e.motion.yrel / -100.0;
+						make_camera(win_w, win_h);
+					}
+					
 					break;
 				case SDL_MOUSEBUTTONDOWN:
 					switch(e.button.button){
@@ -367,33 +455,54 @@ int main(int argc, char **argv){
 						case SDL_BUTTON_WHEELDOWN:
 							break;
 						case SDL_BUTTON_LEFT:
-							marker = cursor;
-							marker_active = true;
+							emiters[0].pos = cursor;
 							cursor_active = true;
-							mass = 2.5;
+							//cursor_mass = 2.5;
+							break;
+						case SDL_BUTTON_MIDDLE:
+							cam_moving = true;
 							break;
 					}
 					break;
 				case SDL_MOUSEBUTTONUP:
 					switch(e.button.button){
 						case SDL_BUTTON_WHEELUP:
-							mass++;
+							//cursor_mass++;
+							cam_zoom += 0.1;
+							make_camera(win_w, win_h);
 							break;
 						case SDL_BUTTON_WHEELDOWN:
-							mass--;
+							//cursor_mass--;
+							cam_zoom -= 0.1;
+							make_camera(win_w, win_h);
 							break;
 						case SDL_BUTTON_LEFT:
-							marker_active = false;
-							cursor_active = false;
-							entity_count++;
-							entities = realloc(entities, sizeof(entity_t) * entity_count);
-							entities[entity_count-1].pos = marker;
-							entities[entity_count-1].vel = (vec_t){
-								cursor.x - marker.x,
-								cursor.y - marker.y
+							emiters[0].vel = (vec_t){
+								cursor.x - emiters[0].pos.x,
+								cursor.y - emiters[0].pos.y
 							};
-							entities[entity_count-1].force = (vec_t){0, 0};
-							entities[entity_count-1].mass = mass;
+							cursor_active = false;
+							break;
+						case SDL_BUTTON_RIGHT:
+							entity_count += cursor_spawn_num;
+							entities = realloc(entities, sizeof(entity_t) * entity_count);
+							for(size_t i = entity_count - cursor_spawn_num - 1; i < entity_count; i++){
+								entities[i] = (entity_t){
+									.pos = (vec_t){
+										.x = cursor.x + (rand() / (float)RAND_MAX) * cursor_width - cursor_width/2,
+										.y = cursor.y + (rand() / (float)RAND_MAX) * cursor_height - cursor_height/2
+									},
+									.vel = (vec_t){0, 0},
+									.force = (vec_t){0, 0},
+									.mass = cursor_min_mass + (rand() / (float)RAND_MAX) * (cursor_max_mass - cursor_min_mass),
+									.color = (color_t){ 0, 1, 0, 0.5 },
+									.ttl = (rand() / (float)RAND_MAX) * 25.0 + 5.0
+								};
+							}
+							
+							break;
+						case SDL_BUTTON_MIDDLE:
+							cam_moving = false;
 							break;
 					}
 					break;
