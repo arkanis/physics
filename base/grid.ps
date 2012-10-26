@@ -1,0 +1,26 @@
+#version 120
+
+uniform vec4 color;
+uniform vec2 origin;
+const vec2 dist = vec2(100, 100);
+
+void main(){
+	/*
+	//vec2 line_intensity = step(0.5, abs(mod(gl_FragCoord.xy, dist) - dist/2) / dist/2);
+	//vec2 line_intensity = abs(mod(gl_FragCoord.xy, dist) - dist/2) / dist/2;
+	vec2 line_intensity = mod(gl_FragCoord.xy, dist);
+	float intensity = max(line_intensity.x, line_intensity.y);
+	if (intensity > 1)
+		discard;
+	
+	gl_FragColor = color; // * max(line_intensity.x, line_intensity.y);
+	*/
+	/*
+	gl_FragColor.rg = sin(gl_FragCoord.rg / 3.14159);
+	gl_FragColor.ba = color.ba;
+	*/
+	vec2 mods = mod(gl_FragCoord.xy, 100);
+	if (min(mods.x, mods.y) > 1)
+		discard;
+	gl_FragColor = color;
+}
