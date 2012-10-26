@@ -134,8 +134,8 @@ void renderer_init(uint16_t window_width, uint16_t window_height, const char *ti
 	glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
 	
 	// Load shaders
-	GLint vertex_shader = load_shader(GL_VERTEX_SHADER, "small.vs");
-	GLint pixel_shader = load_shader(GL_FRAGMENT_SHADER, "small.ps");
+	GLint vertex_shader = load_shader(GL_VERTEX_SHADER, "particles.vs");
+	GLint pixel_shader = load_shader(GL_FRAGMENT_SHADER, "particles.ps");
 	assert(vertex_shader != 0 && pixel_shader != 0);
 	
 	GLint prog = glCreateProgram();
