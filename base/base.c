@@ -450,10 +450,24 @@ int main(int argc, char **argv){
 							break;
 						case SDL_BUTTON_WHEELUP:
 							cam_zoom -= 0.1;
+							{
+								vec2_t world_cursor = m3_v2_mul(screen_to_world_mat, cursor_pos);
+								cam_pos = (vec2_t){
+									cam_pos.x + (world_cursor.x - cam_pos.x) * 0.1,
+									cam_pos.y + (world_cursor.y - cam_pos.y) * 0.1
+								};
+							}
 							cam_update();
 							break;
 						case SDL_BUTTON_WHEELDOWN:
 							cam_zoom += 0.1;
+							{
+								vec2_t world_cursor = m3_v2_mul(screen_to_world_mat, cursor_pos);
+								cam_pos = (vec2_t){
+									cam_pos.x + (world_cursor.x - cam_pos.x) * 0.1,
+									cam_pos.y + (world_cursor.y - cam_pos.y) * 0.1
+								};
+							}
 							cam_update();
 							break;
 					}
