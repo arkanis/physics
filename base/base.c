@@ -37,8 +37,9 @@ Pipeline:
 */
 
 // Forward declarations for various things
-vec2_t renderer_screen_size;
-mat3_t world_to_normal_mat, screen_to_normal_mat, screen_to_world_mat;
+vec2_t screen_size;
+mat3_t screen_to_normal_mat, screen_to_world_mat;
+mat3_t world_to_normal_mat, world_to_screen_mat;
 
 
 //
@@ -261,40 +262,58 @@ void particles_draw(){
 // Camera
 //
 
-// Default height of the viewport in world space with no zoom applied
-float cam_default_height = 10;
-// Center of camera
-vec2_t cam_pos = {0, 0};
-// Camera zoom level
-float cam_zoom = 1;
-bool cam_grabbed = false;
+// Default min width and min height of viewport. These are the dimensions of the viewport with
+// no scaling applied. Min width is used in landscape mode, min height in portrait mode.
+vec2_t vp_default_size = { 10, 10 };
+// Center of viewport
+vec2_t vp_pos = {0, 0};
+// Size of the viewport in world coords
+vec2_t vp_size;
+// Viewport scaling
+float vp_scale_base = 2, vp_scale_exp = 0, vp_scale = 1;
+bool vp_grabbed = false;
 
 void cam_update(){
-	//printf("cam_pos: x %f y %f zoom %f\n", cam_pos.x, cam_pos.y, cam_zoom);
+	float aspect_ratio = screen_size.x / screen_size.y;
+	vp_scale = powf(vp_scale_base, vp_scale_exp);
+	//printf("viewport: aspect ratio %f, scale base: %f, scale exp: %f, scale %f\n", aspect_ratio, vp_scale_base, vp_scale_exp, vp_scale);
 	
-	float cam_height = powf(cam_default_height, cam_zoom);
-	float aspect_ratio = renderer_screen_size.y / renderer_screen_size.x;
-	// Size of the viewport in world space
-	vec2_t viewport = { cam_height / aspect_ratio, cam_height };
-	//printf("viewport: w %f h %f\n", viewport.x, viewport.y);
+	if (aspect_ratio > 1) {
+		// Landscape format, use vp_default_size.y as minimal height
+		vp_size.y = vp_default_size.y * vp_scale;
+		vp_size.x = vp_size.y * aspect_ratio;
+	} else {
+		// Portrait format, use vp_default_size.x as minimal width
+		vp_size.x = vp_default_size.x * vp_scale;
+		vp_size.y = vp_size.x / aspect_ratio;
+	}
 	
-	float sx = 1 / (viewport.x / 2);
-	float sy = 1 / (viewport.y / 2);
-	float tx = -cam_pos.x * sx;
-	float ty = -cam_pos.y * sy;
+	// Calculate matrix to convert screen coords back to world coords
+	float sx = vp_size.x / screen_size.x;
+	float sy = -vp_size.y / screen_size.y;
+	float tx = -0.5 * vp_size.x + vp_pos.x;
+	float ty = 0.5 * vp_size.y + vp_pos.y;
+	m3_transpose(screen_to_world_mat, (mat3_t){
+		sx, 0, tx,
+		0, sy, ty,
+		0, 0, 1
+	});
+	
+	sx = 2 / vp_size.x;
+	sy = 2 / vp_size.y;
+	tx = -vp_pos.x * (2 / vp_size.x);
+	ty = -vp_pos.y * (2 / vp_size.y);
 	m3_transpose(world_to_normal_mat, (mat3_t){
 		sx, 0, tx,
 		0, sy, ty,
 		0, 0, 1
 	});
 	
-	// Calculate matrix to convert screen coords back to world coords
-	sx = viewport.x / renderer_screen_size.x;
-	sy = -viewport.y / renderer_screen_size.y;
-	tx = cam_pos.x - viewport.x / 2;
-	ty = cam_pos.y - viewport.y / 2 + viewport.y;
-	
-	m3_transpose(screen_to_world_mat, (mat3_t){
+	sx = screen_size.x / vp_size.x;
+	sy = screen_size.y / vp_size.y;
+	tx = -vp_pos.x * sx + 0.5 * screen_size.x;
+	ty = -vp_pos.y * sy + 0.5 * screen_size.y;
+	m3_transpose(world_to_screen_mat, (mat3_t){
 		sx, 0, tx,
 		0, sy, ty,
 		0, 0, 1
@@ -310,12 +329,12 @@ void cam_load(){
 // Renderer
 //
 void renderer_resize(uint16_t window_width, uint16_t window_height){
-	renderer_screen_size = (vec2_t){ window_width, window_height };
+	screen_size = (vec2_t){ window_width, window_height };
 	SDL_SetVideoMode(window_width, window_height, 24, SDL_OPENGL | SDL_RESIZABLE);
 	glViewport(0, 0, window_width, window_height);
 	
-	float sx = 1.0 / renderer_screen_size.x * 2.0;
-	float sy = -1.0 / renderer_screen_size.y * 2.0;
+	float sx = 2.0 / screen_size.x;
+	float sy = -2.0 / screen_size.y;
 	float tx = -1.0;
 	float ty = 1.0;
 	m3_transpose(screen_to_normal_mat, (mat3_t){
@@ -391,19 +410,19 @@ int main(int argc, char **argv){
 				case SDL_KEYUP:
 					switch(e.key.keysym.sym){
 						case SDLK_LEFT:
-							cam_pos.x -= 1;
+							vp_pos.x -= 1;
 							cam_update();
 							break;
 						case SDLK_RIGHT:
-							cam_pos.x += 1;
+							vp_pos.x += 1;
 							cam_update();
 							break;
 						case SDLK_UP:
-							cam_pos.y += 1;
+							vp_pos.y += 1;
 							cam_update();
 							break;
 						case SDLK_DOWN:
-							cam_pos.y -= 1;
+							vp_pos.y -= 1;
 							cam_update();
 							break;
 					}
@@ -414,12 +433,13 @@ int main(int argc, char **argv){
 					
 					vec2_t world_cursor = m3_v2_mul(screen_to_world_mat, cursor_pos);
 					//printf("world cursor: %f %f\n", world_cursor.x, world_cursor.y);
+					particles[0].pos = world_cursor;
 					
-					if (cam_grabbed){
+					if (vp_grabbed){
 						// Only use the scaling factors from the current screen to world matrix. Since we work
 						// with deltas here the offsets are not necessary (in fact would destroy the result).
-						cam_pos.x += -screen_to_world_mat[0] * e.motion.xrel;
-						cam_pos.y += -screen_to_world_mat[4] * e.motion.yrel;
+						vp_pos.x += -screen_to_world_mat[0] * e.motion.xrel;
+						vp_pos.y += -screen_to_world_mat[4] * e.motion.yrel;
 						cam_update();
 					}
 					
@@ -429,7 +449,7 @@ int main(int argc, char **argv){
 						case SDL_BUTTON_LEFT:
 							break;
 						case SDL_BUTTON_MIDDLE:
-							cam_grabbed = true;
+							vp_grabbed = true;
 							break;
 						case SDL_BUTTON_RIGHT:
 							break;
@@ -444,30 +464,34 @@ int main(int argc, char **argv){
 						case SDL_BUTTON_LEFT:
 							break;
 						case SDL_BUTTON_MIDDLE:
-							cam_grabbed = false;
+							vp_grabbed = false;
 							break;
 						case SDL_BUTTON_RIGHT:
 							break;
 						case SDL_BUTTON_WHEELUP:
-							cam_zoom -= 0.1;
+							vp_scale_exp -= 0.1;
+							/*
 							{
 								vec2_t world_cursor = m3_v2_mul(screen_to_world_mat, cursor_pos);
-								cam_pos = (vec2_t){
-									cam_pos.x + (world_cursor.x - cam_pos.x) * 0.1,
-									cam_pos.y + (world_cursor.y - cam_pos.y) * 0.1
+								viewport_pos = (vec2_t){
+									viewport_pos.x + (world_cursor.x - viewport_pos.x) * 0.1,
+									viewport_pos.y + (world_cursor.y - viewport_pos.y) * 0.1
 								};
 							}
+							*/
 							cam_update();
 							break;
 						case SDL_BUTTON_WHEELDOWN:
-							cam_zoom += 0.1;
+							vp_scale_exp += 0.1;
+							/*
 							{
 								vec2_t world_cursor = m3_v2_mul(screen_to_world_mat, cursor_pos);
-								cam_pos = (vec2_t){
-									cam_pos.x + (world_cursor.x - cam_pos.x) * 0.1,
-									cam_pos.y + (world_cursor.y - cam_pos.y) * 0.1
+								viewport_pos = (vec2_t){
+									viewport_pos.x + (world_cursor.x - viewport_pos.x) * 0.1,
+									viewport_pos.y + (world_cursor.y - viewport_pos.y) * 0.1
 								};
 							}
+							*/
 							cam_update();
 							break;
 					}
