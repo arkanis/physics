@@ -273,9 +273,13 @@ vec2_t vp_size;
 float vp_scale_base = 2, vp_scale_exp = 0, vp_scale = 1;
 bool vp_grabbed = false;
 
+float vp_scale_for(float exp){
+	return powf(vp_scale_base, exp);
+}
+
 void cam_update(){
 	float aspect_ratio = screen_size.x / screen_size.y;
-	vp_scale = powf(vp_scale_base, vp_scale_exp);
+	vp_scale = vp_scale_for(vp_scale_exp);
 	//printf("viewport: aspect ratio %f, scale base: %f, scale exp: %f, scale %f\n", aspect_ratio, vp_scale_base, vp_scale_exp, vp_scale);
 	
 	if (aspect_ratio > 1) {
@@ -470,28 +474,26 @@ int main(int argc, char **argv){
 							break;
 						case SDL_BUTTON_WHEELUP:
 							vp_scale_exp -= 0.1;
-							/*
 							{
 								vec2_t world_cursor = m3_v2_mul(screen_to_world_mat, cursor_pos);
-								viewport_pos = (vec2_t){
-									viewport_pos.x + (world_cursor.x - viewport_pos.x) * 0.1,
-									viewport_pos.y + (world_cursor.y - viewport_pos.y) * 0.1
+								float new_scale = vp_scale_for(vp_scale_exp);
+								vp_pos = (vec2_t){
+									world_cursor.x + (vp_pos.x - world_cursor.x) * (new_scale / vp_scale),
+									world_cursor.y + (vp_pos.y - world_cursor.y) * (new_scale / vp_scale)
 								};
 							}
-							*/
 							cam_update();
 							break;
 						case SDL_BUTTON_WHEELDOWN:
 							vp_scale_exp += 0.1;
-							/*
 							{
 								vec2_t world_cursor = m3_v2_mul(screen_to_world_mat, cursor_pos);
-								viewport_pos = (vec2_t){
-									viewport_pos.x + (world_cursor.x - viewport_pos.x) * 0.1,
-									viewport_pos.y + (world_cursor.y - viewport_pos.y) * 0.1
+								float new_scale = vp_scale_for(vp_scale_exp);
+								vp_pos = (vec2_t){
+									world_cursor.x + (vp_pos.x - world_cursor.x) * (new_scale / vp_scale),
+									world_cursor.y + (vp_pos.y - world_cursor.y) * (new_scale / vp_scale)
 								};
 							}
-							*/
 							cam_update();
 							break;
 					}
