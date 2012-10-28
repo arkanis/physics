@@ -3,6 +3,8 @@
 uniform vec4 color;
 uniform vec2 grid_offset;
 uniform vec2 grid_spacing;
+uniform float vp_scale_exp;
+uniform vec2 screen_size;
 
 void main(){
 	/*
@@ -12,6 +14,9 @@ void main(){
 		discard;
 	gl_FragColor = color;
 	*/
+	
+	/*
+	// Version with one level of smooth grid lines
 	
 	// First build a periodic function. Scale cosine so that it has the same period as our grid cells.
 	// The result is in the range [1, -1] with 1 at the center of our grid lines and -1 in the middle of nowhere.
@@ -23,4 +28,41 @@ void main(){
 	// Does the same. May be faster, don't know. But is definetly less readable.
 	//float intensity = clamp(max(period.x, period.y) - 0.98, 0, 1) * 50;
 	gl_FragColor = vec4(color.rgb, intensity);
+	*/
+	
+	/*
+	// Calculate the two nearest scale levels (each grid cell contains 2 smaller grid cells)
+	float scale_down = floor(vp_scale_exp);
+	float scale_up = scale_down + 1;
+	float blend = vp_scale_exp - scale_down;
+	*/
+	
+	// Calculate the two nearest scale levels
+	// subdivision defines how many grid cells one cell contains (2 = 4 smaller grid cells)
+	float subdivision = 2;
+	float scale_down = floor( vp_scale_exp - mod(vp_scale_exp, subdivision) );
+	float scale_up = scale_down + subdivision;
+	float blend = mod(vp_scale_exp, subdivision);
+	
+	// Determine the grid size for each level
+	vec2 grid_spacing_down = grid_spacing * pow(2, scale_down);
+	vec2 grid_spacing_up = grid_spacing * pow(2, scale_up);
+	
+	// With the scaled grid size we can now calculate the offset for each level
+	vec2 grid_offset_down = mod(grid_offset, grid_spacing_down) - mod(screen_size / 2, grid_spacing_down);
+	vec2 grid_offset_up = mod(grid_offset, grid_spacing_up) - mod(screen_size / 2, grid_spacing_up);
+	
+	// First build a periodic function. Scale cosine so that it has the same period as our grid cells.
+	// The result is in the range [1, -1] with 1 at the center of our grid lines and -1 in the middle of nowhere.
+	vec2 period_down = cos( (gl_FragCoord.xy + grid_offset_down) * (radians(360) / grid_spacing_down) );
+	vec2 period_up = cos( (gl_FragCoord.xy + grid_offset_up) * (radians(360) / grid_spacing_up) );
+	
+	// Choose the more intensive part of the horizontal and vertical grid lines. Then select a upper
+	// rante from the period function and user it for the alpha value.
+	// intensity_threshold defines at what value we start to actually display the cos function as a grid line.
+	float intensity_threshold = 0.995;
+	float intensity_down = smoothstep(intensity_threshold, 1, max(period_down.x, period_down.y));
+	float intensity_up = smoothstep(intensity_threshold, 1, max(period_up.x, period_up.y));
+	
+	gl_FragColor = vec4(color.rgb, mix(intensity_down, intensity_up, blend));
 }

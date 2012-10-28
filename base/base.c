@@ -42,6 +42,7 @@ mat3_t screen_to_normal_mat, screen_to_world_mat;
 mat3_t world_to_normal_mat, world_to_screen_mat;
 
 vec2_t vp_pos = {0, 0};
+float vp_scale_exp = 0;
 
 //
 // Grid
@@ -79,9 +80,15 @@ void grid_draw(){
 		grid_default_spacing.x * world_to_screen_mat[0],
 		grid_default_spacing.y * world_to_screen_mat[4]
 	};
+	/*
 	vec2_t grid_offset = (vec2_t){
 		fmodf(vp_pos.x, grid_default_spacing.x) * world_to_screen_mat[0] - fmodf(screen_size.x / 2, grid_spacing.x),
 		fmodf(vp_pos.y, grid_default_spacing.y) * world_to_screen_mat[4] - fmodf(screen_size.y / 2, grid_spacing.y)
+	};
+	*/
+	vec2_t grid_offset = (vec2_t){
+		vp_pos.x * world_to_screen_mat[0],
+		vp_pos.y * world_to_screen_mat[4]
 	};
 	
 	glUseProgram(grid_prog);
@@ -94,6 +101,8 @@ void grid_draw(){
 	glUniform4f( glGetUniformLocation(grid_prog, "color"), 0, 0, 0.5, 1 );
 	glUniform2f( glGetUniformLocation(grid_prog, "grid_spacing"), grid_spacing.x, grid_spacing.y );
 	glUniform2f( glGetUniformLocation(grid_prog, "grid_offset"), grid_offset.x, grid_offset.y );
+	glUniform1f( glGetUniformLocation(grid_prog, "vp_scale_exp"), vp_scale_exp );
+	glUniform2f( glGetUniformLocation(grid_prog, "screen_size"), screen_size.x, screen_size.y );
 	glDrawArrays(GL_QUADS, 0, 4);
 	
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -290,7 +299,9 @@ vec2_t vp_default_size = { 10, 10 };
 // Size of the viewport in world coords
 vec2_t vp_size;
 // Viewport scaling
-float vp_scale_base = 2, vp_scale_exp = 0, vp_scale = 1;
+float vp_scale_base = 2, vp_scale = 1;
+// Declaration moved to the top
+//float vp_scale_exp = 0;
 bool vp_grabbed = false;
 
 float vp_scale_for(float exp){
