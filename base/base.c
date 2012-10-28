@@ -41,11 +41,14 @@ vec2_t screen_size;
 mat3_t screen_to_normal_mat, screen_to_world_mat;
 mat3_t world_to_normal_mat, world_to_screen_mat;
 
+vec2_t vp_pos = {0, 0};
 
 //
 // Grid
 //
 GLuint grid_prog, grid_vertex_buffer;
+// Space between grid lines in world units
+vec2_t grid_default_spacing = {1, 1};
 
 void grid_load(){
 	grid_prog = load_and_link_program("grid.vs", "grid.ps");
@@ -72,6 +75,15 @@ void grid_unload(){
 }
 
 void grid_draw(){
+	vec2_t grid_spacing = (vec2_t){
+		grid_default_spacing.x * world_to_screen_mat[0],
+		grid_default_spacing.y * world_to_screen_mat[4]
+	};
+	vec2_t grid_offset = (vec2_t){
+		fmodf(vp_pos.x, grid_default_spacing.x) * world_to_screen_mat[0] - fmodf(screen_size.x / 2, grid_spacing.x),
+		fmodf(vp_pos.y, grid_default_spacing.y) * world_to_screen_mat[4] - fmodf(screen_size.y / 2, grid_spacing.y)
+	};
+	
 	glUseProgram(grid_prog);
 	glBindBuffer(GL_ARRAY_BUFFER, grid_vertex_buffer);
 	
@@ -79,8 +91,9 @@ void grid_draw(){
 	glEnableVertexAttribArray(pos_attrib);
 	glVertexAttribPointer(pos_attrib, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, 0);
 	
-	glUniform4f( glGetUniformLocation(grid_prog, "color"), 1, 1, 1, 1 );
-	glUniform2f( glGetUniformLocation(grid_prog, "origin"), 25, 25 );
+	glUniform4f( glGetUniformLocation(grid_prog, "color"), 0, 0, 0.5, 1 );
+	glUniform2f( glGetUniformLocation(grid_prog, "grid_spacing"), grid_spacing.x, grid_spacing.y );
+	glUniform2f( glGetUniformLocation(grid_prog, "grid_offset"), grid_offset.x, grid_offset.y );
 	glDrawArrays(GL_QUADS, 0, 4);
 	
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -184,29 +197,35 @@ void particles_load(){
 	
 	// Create test particles
 	srand(5);
-	particle_count = 10;
+	particle_count = 4;
 	particles = realloc(particles, sizeof(particle_t) * particle_count);
-	/*
+	
 	particles[0] = (particle_t){
-		.pos = (vec2_t){ 0, 0 },
+		.pos = (vec2_t){ -1, -1 },
 		.vel = (vec2_t){ 0, 0 },
 		.force = (vec2_t){0, 0},
 		.mass = 1
 	};
 	particles[1] = (particle_t){
-		.pos = (vec2_t){ 2, 2 },
+		.pos = (vec2_t){ 0, 0 },
 		.vel = (vec2_t){ 0, 0 },
 		.force = (vec2_t){0, 0},
 		.mass = 1
 	};
 	particles[2] = (particle_t){
+		.pos = (vec2_t){ 2, 2 },
+		.vel = (vec2_t){ 0, 0 },
+		.force = (vec2_t){0, 0},
+		.mass = 1
+	};
+	particles[3] = (particle_t){
 		.pos = (vec2_t){ 2, 0 },
 		.vel = (vec2_t){ 0, 0 },
 		.force = (vec2_t){0, 0},
 		.mass = 1
 	};
-	*/
 	
+	/*
 	for(size_t i = 0; i < particle_count; i++){
 		particles[i] = (particle_t){
 			.pos = (vec2_t){ rand_in(-10, 10), rand_in(-10, 10) },
@@ -215,6 +234,7 @@ void particles_load(){
 			.mass = 1
 		};
 	}
+	*/
 }
 
 void particles_unload(){
@@ -265,8 +285,8 @@ void particles_draw(){
 // Default min width and min height of viewport. These are the dimensions of the viewport with
 // no scaling applied. Min width is used in landscape mode, min height in portrait mode.
 vec2_t vp_default_size = { 10, 10 };
-// Center of viewport
-vec2_t vp_pos = {0, 0};
+// Center of viewport, declaration moved to the top
+//vec2_t vp_pos = {0, 0};
 // Size of the viewport in world coords
 vec2_t vp_size;
 // Viewport scaling
@@ -371,7 +391,7 @@ void renderer_draw(){
 	glClearColor(0, 0, 0, 1.0);
 	glClear(GL_COLOR_BUFFER_BIT);
 	
-	//grid_draw();
+	grid_draw();
 	particles_draw();
 	cursor_draw();
 }
@@ -437,7 +457,7 @@ int main(int argc, char **argv){
 					
 					vec2_t world_cursor = m3_v2_mul(screen_to_world_mat, cursor_pos);
 					//printf("world cursor: %f %f\n", world_cursor.x, world_cursor.y);
-					particles[0].pos = world_cursor;
+					//particles[0].pos = world_cursor;
 					
 					if (vp_grabbed){
 						// Only use the scaling factors from the current screen to world matrix. Since we work

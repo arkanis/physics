@@ -1,26 +1,26 @@
 #version 120
 
 uniform vec4 color;
-uniform vec2 origin;
-const vec2 dist = vec2(100, 100);
+uniform vec2 grid_offset;
+uniform vec2 grid_spacing;
 
 void main(){
 	/*
-	//vec2 line_intensity = step(0.5, abs(mod(gl_FragCoord.xy, dist) - dist/2) / dist/2);
-	//vec2 line_intensity = abs(mod(gl_FragCoord.xy, dist) - dist/2) / dist/2;
-	vec2 line_intensity = mod(gl_FragCoord.xy, dist);
-	float intensity = max(line_intensity.x, line_intensity.y);
-	if (intensity > 1)
-		discard;
-	
-	gl_FragColor = color; // * max(line_intensity.x, line_intensity.y);
-	*/
-	/*
-	gl_FragColor.rg = sin(gl_FragCoord.rg / 3.14159);
-	gl_FragColor.ba = color.ba;
-	*/
-	vec2 mods = mod(gl_FragCoord.xy, 100);
+	// Simple version that works for sure
+	vec2 mods = mod(gl_FragCoord.xy + grid_offset, grid_spacing);
 	if (min(mods.x, mods.y) > 1)
 		discard;
 	gl_FragColor = color;
+	*/
+	
+	// First build a periodic function. Scale cosine so that it has the same period as our grid cells.
+	// The result is in the range [1, -1] with 1 at the center of our grid lines and -1 in the middle of nowhere.
+	vec2 period = cos( (gl_FragCoord.xy + grid_offset) * (radians(360) / grid_spacing) );
+	
+	// Choose the more intensive part of the horizontal and vertical grid lines. Then select a upper
+	// rante from the period function and user it for the alpha value.
+	float intensity = smoothstep(0.98, 1, max(period.x, period.y));
+	// Does the same. May be faster, don't know. But is definetly less readable.
+	//float intensity = clamp(max(period.x, period.y) - 0.98, 0, 1) * 50;
+	gl_FragColor = vec4(color.rgb, intensity);
 }
