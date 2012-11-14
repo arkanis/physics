@@ -39,6 +39,7 @@ Pipeline:
 
 // Viewport of the renderer. Data from the viewport is used by other components.
 viewport_p viewport;
+bool debug = false;
 
 //
 // Grid
@@ -588,12 +589,18 @@ void sim_propagate_forces(){
  * dt in seconds.
  */
 void simulate(float dt){
+	if (debug) printf("step with dt %fs\n", dt);
+	
+	for(size_t i = 0; i < particle_count; i++)
+		particles[i].force = (vec2_t){0, 0};
+	
 	if (sim_grabbed_particle_idx != -1)
-		particles[sim_grabbed_particle_idx].force = v2_add(particles[sim_grabbed_particle_idx].force, sim_grabbed_force);
+		particles[sim_grabbed_particle_idx].force = v2_add(particles[sim_grabbed_particle_idx].force, v2_muls(sim_grabbed_force, 10));
 	
 	// Iterate all beams and calculate the forces they exert on the particles
-	float modulus_of_elasticity = 210e3; // 210e9; // N_m2 (elastic modulus of steel)
+	float modulus_of_elasticity = 50000; // 210e3; // 210e9; // N_m2 (elastic modulus of steel)
 	float beam_profile_area = 0.2 * 0.2; // m2
+	float deform_threshold = 20; // N
 	for(size_t i = 0; i < beam_count; i++){
 		beam_p beam = &beams[i];
 		
@@ -606,6 +613,15 @@ void simulate(float dt){
 		float dilatation = beam->length - p1_to_p2_len;
 		float spring_constant = (modulus_of_elasticity * beam_profile_area) / beam->length;
 		float force = spring_constant * dilatation;
+		if (debug) printf("  beam %8.2f m, dl %6.2f m, force: %8.2f N", beam->length, dilatation, force);
+		
+		if (abs(force) > deform_threshold) {
+			beam->length -= force / (modulus_of_elasticity * beam_profile_area) * beam->length;
+			if (beam->length < 0)
+				beam->length = 0;
+			if (debug) printf(" deformed to %8.2f m (force %8.2f N)", beam->length, force);
+		}
+		if (debug) printf("\n");
 		
 		vec2_t p1_to_p2_norm = v2_divs(p1_to_p2, p1_to_p2_len);
 		beam->p1->force = v2_add(beam->p1->force, v2_muls(p1_to_p2_norm, -force));
@@ -739,21 +755,17 @@ int main(int argc, char **argv){
 								printf("switched to edit mode\n");
 							}
 							break;
+						case SDLK_d:
+							debug = !debug;
+							break;
 						case SDLK_LEFT:
-							viewport->pos.x -= 1;
-							vp_changed(viewport);
 							break;
 						case SDLK_RIGHT:
-							viewport->pos.x += 1;
-							vp_changed(viewport);
+							simulate(cycle_duration / 1000.0);
 							break;
 						case SDLK_UP:
-							viewport->pos.y += 1;
-							vp_changed(viewport);
 							break;
 						case SDLK_DOWN:
-							viewport->pos.y -= 1;
-							vp_changed(viewport);
 							break;
 					}
 					break;
