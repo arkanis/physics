@@ -690,12 +690,13 @@ int main(int argc, char **argv){
 	grid_load();
 	cursor_load();
 	particles_load();
+	particles_load_model(argv[1]);
 	
 	SDL_Event e;
-	bool quit = false, viewport_grabbed = false;
+	bool quit = false, viewport_grabbed = false, paused = false;
 	uint32_t ticks = SDL_GetTicks();
 	
-	prog_mode_t mode = MODE_EDIT;
+	prog_mode_t mode = MODE_SIM;
 	particle_p selected_particle = NULL;
 	
 	while (!quit) {
@@ -710,7 +711,11 @@ int main(int argc, char **argv){
 				case SDL_KEYUP:
 					switch(e.key.keysym.sym){
 						case SDLK_SPACE:
-							//simulate(cycle_duration / 1000.0);
+							paused = !paused;
+							if (paused)
+								printf("simulation paused\n");
+							else
+								printf("continuing simulation\n");
 							break;
 						case SDLK_l:
 							// If shift is pressed load the save file mesh, otherwise the load file mesh
@@ -853,7 +858,7 @@ int main(int argc, char **argv){
 		
 		renderer_draw();
 		SDL_GL_SwapBuffers();
-		if (mode == MODE_SIM)
+		if (mode == MODE_SIM && !paused)
 			simulate(cycle_duration / 1000.0);
 		
 		int32_t duration = cycle_duration - (SDL_GetTicks() - ticks);
