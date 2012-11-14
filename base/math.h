@@ -49,6 +49,13 @@ static inline vec2_t v2_div(vec2_t a, vec2_t b){
 	};
 }
 
+static inline vec2_t v2_divs(vec2_t a, float s){
+	return (vec2_t){
+		a.x / s,
+		a.y / s
+	};
+}
+
 static inline float v2_length(vec2_t v){
 	return sqrtf(v.x*v.x + v.y*v.y);
 }

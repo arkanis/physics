@@ -104,6 +104,7 @@ void grid_draw(){
 // Cursor
 //
 vec2_t cursor_pos = {0, 0};
+color_t cursor_color = {1, 1, 1, 1};
 GLuint cursor_prog, cursor_vertex_buffer;
 
 void cursor_load(){
@@ -146,7 +147,7 @@ void cursor_draw(){
 	
 	GLint color_uni = glGetUniformLocation(cursor_prog, "color");
 	assert(color_uni != -1);
-	glUniform4f(color_uni, 1, 1, 1, 1);
+	glUniform4f(color_uni, cursor_color.r, cursor_color.g, cursor_color.b, cursor_color.a);
 	
 	GLint projection_uni = glGetUniformLocation(cursor_prog, "projection");
 	assert(projection_uni != -1);
@@ -171,7 +172,7 @@ typedef struct {
 #define PARTICLE_TRAVERSED 1<<0
 
 particle_p particles = NULL;
-size_t particle_count;
+size_t particle_count = 0;
 GLuint particle_prog, particle_vertex_buffer;
 
 typedef struct {
@@ -184,8 +185,132 @@ typedef struct {
 #define BEAM_FOLLOWED 1<<1
 
 beam_p beams = NULL;
-size_t beam_count;
+size_t beam_count = 0;
 GLuint beam_prog, beam_vertex_buffer;
+
+
+void particles_save_model(const char *filename){
+	FILE *file = fopen(filename, "w");
+	
+	for(size_t i = 0; i < particle_count; i++){
+		particle_p p = &particles[i];
+		fprintf(file, "p %f %f %f\n", p->pos.x, p->pos.y, p->mass);
+	}
+	
+	for(size_t i = 0; i < beam_count; i++){
+		beam_p beam = &beams[i];
+		
+		if (beam == NULL)
+			continue;
+		
+		fprintf(file, "b %zu %zu\n", (beam->p1 - particles), (beam->p2 - particles));
+	}
+	
+	fclose(file);
+	printf("saved current mesh to %s\n", filename);
+}
+
+void particles_load_model(const char *filename){
+	const size_t line_limit = 512;
+	char line[line_limit];
+	
+	FILE* file = fopen(filename, "r");
+	
+	// First count the number of particles and beams
+	particle_count = 0, beam_count = 0;
+	while( fgets(line, line_limit, file) != NULL ){
+		switch(line[0]){
+			case 'p':  // particle
+				particle_count++;
+				break;
+			case 'b': // beam
+				beam_count++;
+				break;
+		}
+	}
+	printf("model %s: %zu particles, %zu beams\n", filename, particle_count, beam_count);
+	
+	// Now we know how many particles and beams we need, allocate them
+	particles = realloc(particles, sizeof(particle_t) * particle_count);
+	beams = realloc(beams, sizeof(beam_t) * beam_count);
+	
+	// Load the model again but this time extract the values into our particles and beams
+	rewind(file);
+	
+	size_t particle_idx = 0, beam_idx = 0;
+	float x, y, mass;
+	size_t from_idx, to_idx;
+	while( fgets(line, line_limit, file) != NULL ){
+		switch(line[0]){
+			case 'p':  // particle
+				if (particle_idx >= particle_count)
+					break;
+				sscanf(line, "p %f %f %f", &x, &y, &mass);
+				printf("particles[%zu] at %f %f mass %f\n", particle_idx, x, y, mass);
+				particles[particle_idx] = (particle_t){
+					.pos = (vec2_t){ x, y },
+					.vel = (vec2_t){ 0, 0 },
+					.force = (vec2_t){0, 0},
+					.mass = mass
+				};
+				particle_idx++;
+				break;
+			case 'b': // beam
+				if (beam_idx >= beam_count)
+					break;
+				sscanf(line, "b %zu %zu", &from_idx, &to_idx);
+				printf("beams[%zu] from %zu to %zu\n", beam_idx, from_idx, to_idx);
+				beams[beam_idx] = (beam_t){
+					.p1 = &particles[from_idx],
+					.p2 = &particles[to_idx],
+					.length = v2_length( v2_sub(particles[to_idx].pos, particles[from_idx].pos) )
+				};
+				beam_idx++;
+				break;
+		}
+	}
+	
+	fclose(file);
+	
+	printf("loaded mesh from %s\n", filename);
+}
+
+void particles_add(float x, float y, float mass){
+	particle_p old_particle_addr = particles;
+	
+	particle_count++;
+	particles = realloc(particles, sizeof(particle_t) * particle_count);
+	
+	particles[particle_count-1] = (particle_t){
+		.pos = (vec2_t){ x, y },
+		.vel = (vec2_t){ 0, 0 },
+		.force = (vec2_t){0, 0},
+		.mass = mass
+	};
+	
+	// Update the pointers in the beams array by calculating the old index and then a new pointer
+	for(size_t i = 0; i < beam_count; i++){
+		beam_p beam = &beams[i];
+		
+		if (beam == NULL)
+			continue;
+		
+		beam->p1 = &particles[beam->p1 - old_particle_addr];
+		beam->p2 = &particles[beam->p2 - old_particle_addr];
+	}
+}
+
+void particles_add_beam(particle_p from, particle_p to){
+	beam_count++;
+	beams = realloc(beams, sizeof(beam_t) * beam_count);
+	
+	beams[beam_count-1] = (beam_t){
+		.p1 = from,
+		.p2 = to,
+		.length = v2_length( v2_sub(to->pos, from->pos) )
+	};
+}
+
 
 void particles_load(){
 	beam_prog = load_and_link_program("unit.vs", "unit.ps");
@@ -215,124 +340,20 @@ void particles_load(){
 	};
 	glBufferData(GL_ARRAY_BUFFER, sizeof(vertecies), vertecies, GL_STATIC_DRAW);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
-	
-	// Create test particles
-	/*
-	particle_count = 4;
-	particles = realloc(particles, sizeof(particle_t) * particle_count);
-	
-	particles[0] = (particle_t){
-		.pos = (vec2_t){ -1, -1 },
-		.vel = (vec2_t){ 0, 0 },
-		.force = (vec2_t){0, 0},
-		.mass = 1
-	};
-	particles[1] = (particle_t){
-		.pos = (vec2_t){ 0, 0 },
-		.vel = (vec2_t){ 0, 0 },
-		.force = (vec2_t){0, 0},
-		.mass = 1
-	};
-	particles[2] = (particle_t){
-		.pos = (vec2_t){ 2, 2 },
-		.vel = (vec2_t){ 0, 0 },
-		.force = (vec2_t){0, 0},
-		.mass = 1
-	};
-	particles[3] = (particle_t){
-		.pos = (vec2_t){ 2, 0 },
-		.vel = (vec2_t){ 0, 0 },
-		.force = (vec2_t){0, 0},
-		.mass = 1
-	};
-	*/
-	/*
-	srand(5);
-	for(size_t i = 0; i < particle_count; i++){
-		particles[i] = (particle_t){
-			.pos = (vec2_t){ rand_in(-10, 10), rand_in(-10, 10) },
-			.vel = (vec2_t){ rand_in(-2, 2), rand_in(-2, 2) },
-			.force = (vec2_t){0, 0},
-			.mass = 1
-		};
-	}
-	*/
-	
-	// Create test beams
-	inline particle_t particle_at(float x, float y){
-		return (particle_t){
-			.pos = (vec2_t){ x, y },
-			.vel = (vec2_t){ 0, 0 },
-			.force = (vec2_t){0, 0},
-			.mass = 1
-		};
-	}
-	
-	particle_count = 16;
-	particles = realloc(particles, sizeof(particle_t) * particle_count);
-	
-	particles[0] = particle_at(0, 0);
-	particles[1] = particle_at(0, 2);
-	particles[2] = particle_at(0, 4);
-	particles[3] = particle_at(0, 6);
-	particles[4] = particle_at(-1, -1);
-	particles[5] = particle_at(-1, 1);
-	particles[6] = particle_at(-1, 3);
-	particles[7] = particle_at(-1, 5);
-	particles[8] = particle_at(-2, -1);
-	particles[9] = particle_at(-2, 1);
-	particles[10] = particle_at(-2, 3);
-	particles[11] = particle_at(-2, 5);
-	particles[12] = particle_at(-3, 0);
-	particles[13] = particle_at(-3, 2);
-	particles[14] = particle_at(-3, 4);
-	particles[15] = particle_at(-3, 6);
-	
-	inline beam_t beam_from_to(size_t p1_index, size_t p2_index){
-		return (beam_t){
-			.p1 = &particles[p1_index],
-			.p2 = &particles[p2_index],
-			.length = v2_length( v2_sub(particles[p2_index].pos, particles[p1_index].pos) )
-		};
-	}
-	
-	beam_count = 24;
-	beams = realloc(beams, sizeof(beam_t) * beam_count);
-	
-	beams[0] = beam_from_to(0, 1);
-	beams[1] = beam_from_to(1, 2);
-	beams[2] = beam_from_to(2, 3);
-	beams[3] = beam_from_to(0, 4);
-	beams[4] = beam_from_to(0, 5);
-	beams[5] = beam_from_to(1, 5);
-	beams[6] = beam_from_to(1, 6);
-	beams[7] = beam_from_to(2, 6);
-	beams[8] = beam_from_to(2, 7);
-	beams[9] = beam_from_to(3, 7);
-	
-	beams[10] = beam_from_to(4, 8);
-	beams[11] = beam_from_to(5, 9);
-	beams[12] = beam_from_to(6, 10);
-	beams[13] = beam_from_to(7, 11);
-	
-	beams[14] = beam_from_to(12, 13);
-	beams[15] = beam_from_to(13, 14);
-	beams[16] = beam_from_to(14, 15);
-	beams[17] = beam_from_to(12, 8);
-	beams[18] = beam_from_to(12, 9);
-	beams[19] = beam_from_to(13, 9);
-	beams[20] = beam_from_to(13, 10);
-	beams[21] = beam_from_to(14, 10);
-	beams[22] = beam_from_to(14, 11);
-	beams[23] = beam_from_to(15, 11);
 }
 
 void particles_unload(){
 	free(particles);
 	particles = NULL;
 	
+	free(beams);
+	beams = NULL;
+	
 	glDeleteBuffers(1, &particle_vertex_buffer);
 	delete_program_and_shaders(particle_prog);
+	
+	glDeleteBuffers(1, &beam_vertex_buffer);
+	delete_program_and_shaders(beam_prog);
 }
 
 void particles_draw(){
@@ -446,6 +467,7 @@ void renderer_draw(){
 // Simulation
 //
 ssize_t sim_grabbed_particle_idx = -1;
+vec2_t sim_grabbed_force = {0, 0};
 
 typedef void (*particle_func_t)(particle_p particle, particle_p from);
 typedef void (*beam_func_t)(beam_p beam, particle_p from, particle_p to);
@@ -562,7 +584,35 @@ void sim_propagate_forces(){
 	sim_traverse_particles(&particles[sim_grabbed_particle_idx], particle_func);
 }
 
+/**
+ * dt in seconds.
+ */
 void simulate(float dt){
+	if (sim_grabbed_particle_idx != -1)
+		particles[sim_grabbed_particle_idx].force = v2_add(particles[sim_grabbed_particle_idx].force, sim_grabbed_force);
+	
+	// Iterate all beams and calculate the forces they exert on the particles
+	float modulus_of_elasticity = 210e3; // 210e9; // N_m2 (elastic modulus of steel)
+	float beam_profile_area = 0.2 * 0.2; // m2
+	for(size_t i = 0; i < beam_count; i++){
+		beam_p beam = &beams[i];
+		
+		if (beam == NULL)
+			continue;
+		
+		vec2_t p1_to_p2 = v2_sub(beam->p2->pos, beam->p1->pos);
+		float p1_to_p2_len = v2_length(p1_to_p2);
+		
+		float dilatation = beam->length - p1_to_p2_len;
+		float spring_constant = (modulus_of_elasticity * beam_profile_area) / beam->length;
+		float force = spring_constant * dilatation;
+		
+		vec2_t p1_to_p2_norm = v2_divs(p1_to_p2, p1_to_p2_len);
+		beam->p1->force = v2_add(beam->p1->force, v2_muls(p1_to_p2_norm, -force));
+		beam->p2->force = v2_add(beam->p2->force, v2_muls(p1_to_p2_norm, force));
+	}
+	
+	// Iterate over all particles to advance to the next time step. Delete all forces afterwards.
 	for(size_t i = 0; i < particle_count; i++){
 		/*
 		a = f / m;
@@ -578,18 +628,24 @@ void simulate(float dt){
 		p->vel.y += acl.y * dt;
 		p->pos.x += p->vel.x * dt;
 		p->pos.y += p->vel.y * dt;
+		
+		p->force = (vec2_t){0, 0};
 	}
 }
 
-void sim_apply_force(){
-	vec2_t world_cursor = m3_v2_mul(viewport->screen_to_world, cursor_pos);
-	
-	// Find nearest particle
+typedef struct  {
+	particle_p particle;
+	size_t index;
+	float dist;
+	vec2_t to_particle;
+} closest_particle_t;
+
+closest_particle_t sim_nearest_particle(vec2_t pos){
 	size_t closest_idx = 0;
 	float closest_dist = INFINITY;
 	vec2_t to_closest;
 	for(size_t i = 0; i < particle_count; i++){
-		vec2_t to_particle = v2_sub(particles[i].pos, world_cursor);
+		vec2_t to_particle = v2_sub(particles[i].pos, pos);
 		float dist = v2_length(to_particle);
 		if (dist < closest_dist){
 			closest_idx = i;
@@ -598,20 +654,34 @@ void sim_apply_force(){
 		}
 	}
 	
-	particles[closest_idx].force = to_closest;
-	sim_grabbed_particle_idx = closest_idx;
-	sim_propagate_forces();
+	return (closest_particle_t){ &particles[closest_idx], closest_idx, closest_dist, to_closest };
+}
+
+void sim_apply_force(){
+	vec2_t world_cursor = m3_v2_mul(viewport->screen_to_world, cursor_pos);
+	
+	// Find nearest particle
+	closest_particle_t cp = sim_nearest_particle(world_cursor);
+	
+	sim_grabbed_particle_idx = cp.index;
+	sim_grabbed_force = cp.to_particle;
 }
 
 void sim_retain_force(){
-	particles[sim_grabbed_particle_idx].force = (vec2_t){0, 0};
-	sim_propagate_forces();
 	sim_grabbed_particle_idx = -1;
+	sim_grabbed_force = (vec2_t){0, 0};
 }
 
+enum prog_mode_e { MODE_EDIT, MODE_SIM };
+typedef enum prog_mode_e prog_mode_t;
 
 int main(int argc, char **argv){
-	uint32_t cycle_duration = 1.0 / 60.0 * 1000;
+	if (argc != 3){
+		fprintf(stderr, "usage: %s load.mesh save.mesh\n", argv[0]);
+		return 1;
+	}
+	
+	uint32_t cycle_duration = 10.0; //1.0 / 60.0 * 1000;
 	uint16_t win_w = 640, win_h = 480;
 	
 	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER);
@@ -625,6 +695,9 @@ int main(int argc, char **argv){
 	bool quit = false, viewport_grabbed = false;
 	uint32_t ticks = SDL_GetTicks();
 	
+	prog_mode_t mode = MODE_EDIT;
+	particle_p selected_particle = NULL;
+	
 	while (!quit) {
 		while ( SDL_PollEvent(&e) ) {
 			switch(e.type){
@@ -636,6 +709,31 @@ int main(int argc, char **argv){
 					break;
 				case SDL_KEYUP:
 					switch(e.key.keysym.sym){
+						case SDLK_SPACE:
+							//simulate(cycle_duration / 1000.0);
+							break;
+						case SDLK_l:
+							// If shift is pressed load the save file mesh, otherwise the load file mesh
+							if ( (e.key.keysym.mod & KMOD_RSHIFT) || (e.key.keysym.mod & KMOD_LSHIFT) )
+								particles_load_model(argv[2]);
+							else
+								particles_load_model(argv[1]);
+							selected_particle = NULL;
+							break;
+						case SDLK_s:
+							particles_save_model(argv[2]);
+							selected_particle = NULL;
+							break;
+						case SDLK_m:
+							if (mode == MODE_EDIT) {
+								mode = MODE_SIM;
+								printf("switched to simulation mode\n");
+							} else {
+								mode = MODE_EDIT;
+								selected_particle = NULL;
+								printf("switched to edit mode\n");
+							}
+							break;
 						case SDLK_LEFT:
 							viewport->pos.x -= 1;
 							vp_changed(viewport);
@@ -674,7 +772,11 @@ int main(int argc, char **argv){
 				case SDL_MOUSEBUTTONDOWN:
 					switch(e.button.button){
 						case SDL_BUTTON_LEFT:
-							sim_apply_force();
+							if (mode == MODE_EDIT) {
+								// ...
+							} else {
+								sim_apply_force();
+							}
 							break;
 						case SDL_BUTTON_MIDDLE:
 							viewport_grabbed = true;
@@ -690,12 +792,35 @@ int main(int argc, char **argv){
 				case SDL_MOUSEBUTTONUP:
 					switch(e.button.button){
 						case SDL_BUTTON_LEFT:
-							sim_retain_force();
+							if (mode == MODE_EDIT) {
+								if (selected_particle == NULL) {
+									// Nothing selected yet, select closest particle
+									vec2_t world_cursor = m3_v2_mul(viewport->screen_to_world, cursor_pos);
+									selected_particle = sim_nearest_particle(world_cursor).particle;
+									cursor_color = (color_t){1, 0, 0, 1};
+									printf("selected particle %zu\n", selected_particle - particles);
+								} else {
+									// Build a beam between the selected particle and the one closest to the cursor
+									vec2_t world_cursor = m3_v2_mul(viewport->screen_to_world, cursor_pos);
+									particle_p target_particle = sim_nearest_particle(world_cursor).particle;
+									particles_add_beam(selected_particle, target_particle);
+									printf("beam from particle %zu to %zu\n", selected_particle - particles, target_particle - particles);
+									cursor_color = (color_t){1, 1, 1, 1};
+									selected_particle = NULL;
+								}
+							} else {
+								sim_retain_force();
+							}
 							break;
 						case SDL_BUTTON_MIDDLE:
 							viewport_grabbed = false;
 							break;
 						case SDL_BUTTON_RIGHT:
+							if (mode == MODE_EDIT) {
+								// Create new particle at world pos
+								vec2_t world_cursor = m3_v2_mul(viewport->screen_to_world, cursor_pos);
+								particles_add(world_cursor.x, world_cursor.y, 1);
+							}
 							break;
 						case SDL_BUTTON_WHEELUP:
 							viewport->scale_exp -= 0.1;
@@ -728,7 +853,8 @@ int main(int argc, char **argv){
 		
 		renderer_draw();
 		SDL_GL_SwapBuffers();
-		simulate(cycle_duration / 1000.0);
+		if (mode == MODE_SIM)
+			simulate(cycle_duration / 1000.0);
 		
 		int32_t duration = cycle_duration - (SDL_GetTicks() - ticks);
 		if (duration > 0)
