@@ -17,9 +17,12 @@ void main(){
 	printf("version: %s\n", glGetString(GL_VERSION));
 	printf("shading language version: %s\n", glGetString(GL_SHADING_LANGUAGE_VERSION));
 	
-	GLint value;
+	GLint value = 0;
 	glGetIntegerv(GL_MAX_TEXTURE_SIZE, &value);
 	printf("max texture size: %d\n", value);
+	value = 0;
+	glGetIntegerv(GL_MAX_RECTANGLE_TEXTURE_SIZE_ARB, &value);
+	printf("max rectangele texture size: %d\n", value);
 	
 	printf("extentions:\n");
 	GLint ext_count;
