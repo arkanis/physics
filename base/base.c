@@ -171,6 +171,7 @@ typedef struct {
 } particle_t, *particle_p;
 
 #define PARTICLE_TRAVERSED 1<<0
+#define PARTICLE_SELECTED 1<<1
 
 particle_p particles = NULL;
 size_t particle_count = 0;
@@ -189,6 +190,20 @@ beam_p beams = NULL;
 size_t beam_count = 0;
 GLuint beam_prog, beam_vertex_buffer;
 
+// Thruster forward declaration to create thrusters when loading a model
+typedef struct {
+	size_t p1_idx, p2_idx;
+	float force;
+	uint8_t controlled_by;
+} thruster_t, *thruster_p;
+
+#define THRUSTER_BACK 1<<0
+#define THRUSTER_FRONT 1<<1
+#define THRUSTER_LEFT 1<<2
+#define THRUSTER_RIGHT 1<<3
+
+thruster_p thrusters = NULL;
+size_t thruster_count = 0;
 
 void particles_save_model(const char *filename){
 	FILE *file = fopen(filename, "w");
@@ -207,6 +222,11 @@ void particles_save_model(const char *filename){
 		fprintf(file, "b %zu %zu\n", (beam->p1 - particles), (beam->p2 - particles));
 	}
 	
+	for(size_t i = 0; i < thruster_count; i++){
+		thruster_p t = &thrusters[i];
+		fprintf(file, "t %zu %zu %f %2x\n", t->p1_idx, t->p2_idx, t->force, t->controlled_by);
+	}
+	
 	fclose(file);
 	printf("saved current mesh to %s\n", filename);
 }
@@ -218,7 +238,9 @@ void particles_load_model(const char *filename){
 	FILE* file = fopen(filename, "r");
 	
 	// First count the number of particles and beams
-	particle_count = 0, beam_count = 0;
+	particle_count = 0;
+	beam_count = 0;
+	thruster_count = 0;
 	while( fgets(line, line_limit, file) != NULL ){
 		switch(line[0]){
 			case 'p':  // particle
@@ -227,6 +249,9 @@ void particles_load_model(const char *filename){
 			case 'b': // beam
 				beam_count++;
 				break;
+			case 't': // thruster
+				thruster_count++;
+				break;
 		}
 	}
 	printf("model %s: %zu particles, %zu beams\n", filename, particle_count, beam_count);
@@ -234,13 +259,15 @@ void particles_load_model(const char *filename){
 	// Now we know how many particles and beams we need, allocate them
 	particles = realloc(particles, sizeof(particle_t) * particle_count);
 	beams = realloc(beams, sizeof(beam_t) * beam_count);
+	thrusters = realloc(thrusters, sizeof(thruster_t) * thruster_count);
 	
 	// Load the model again but this time extract the values into our particles and beams
 	rewind(file);
 	
-	size_t particle_idx = 0, beam_idx = 0;
-	float x, y, mass;
+	size_t particle_idx = 0, beam_idx = 0, thruster_idx = 0;
+	float x, y, mass, force;
 	size_t from_idx, to_idx;
+	int controlled_by;
 	while( fgets(line, line_limit, file) != NULL ){
 		switch(line[0]){
 			case 'p':  // particle
@@ -268,6 +295,16 @@ void particles_load_model(const char *filename){
 				};
 				beam_idx++;
 				break;
+			case 't': // thruster
+				if (thruster_idx >= thruster_count)
+					break;
+				sscanf(line, "t %zu %zu %f %x", &from_idx, &to_idx, &force, &controlled_by);
+				thrusters[thruster_idx] = (thruster_t){
+					.p1_idx = from_idx, .p2_idx = to_idx,
+					.force = force,
+					.controlled_by = controlled_by
+				};
+				thruster_idx++;
 		}
 	}
 	
@@ -374,15 +411,20 @@ void particles_draw(){
 	assert(to_norm_uni != -1);
 	assert(trans_uni != -1);
 	
-	glUniform4f(color_uni, 0, 1, 0, 1 );
 	glUniformMatrix3fv(to_norm_uni, 1, GL_FALSE, viewport->world_to_normal);
 	
 	for(size_t i = 0; i < particle_count; i++){
 		glUniformMatrix3fv(trans_uni, 1, GL_TRUE, (float[9]){
-			1, 0, particles[i].pos.x,
-			0, 1, particles[i].pos.y,
+			0.25, 0, particles[i].pos.x,
+			0, 0.25, particles[i].pos.y,
 			0, 0, 1
 		});
+		
+		if (particles[i].flags & PARTICLE_SELECTED)
+			glUniform4f(color_uni, 1, 0, 0, 1 );
+		else
+			glUniform4f(color_uni, 0, 1, 0, 1 );
+		
 		glDrawArrays(GL_QUADS, 0, 4);
 	}
 	
@@ -425,6 +467,103 @@ void particles_draw(){
 
 
 //
+// Thruster
+//
+
+GLuint thruster_prog, thruster_vertex_buffer;
+
+
+void thrusters_load(){
+	thruster_prog = load_and_link_program("thruster.vs", "thruster.ps");
+	assert(thruster_prog != 0);
+	
+	glGenBuffers(1, &thruster_vertex_buffer);
+	assert(thruster_vertex_buffer != 0);
+	glBindBuffer(GL_ARRAY_BUFFER, thruster_vertex_buffer);
+	
+	const float vertecies[] = {
+		0.5, 0.125,
+		-0.5, 0.25,
+		-0.5, -0.25,
+		0.5, -0.125
+	};
+	glBufferData(GL_ARRAY_BUFFER, sizeof(vertecies), vertecies, GL_STATIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+}
+
+void thrusters_unload(){
+	free(thrusters);
+	thrusters = NULL;
+	thruster_count = 0;
+	
+	glDeleteBuffers(1, &thruster_vertex_buffer);
+	delete_program_and_shaders(thruster_prog);
+}
+
+void thrusters_draw(){
+	// Draw particles
+	glUseProgram(thruster_prog);
+	glBindBuffer(GL_ARRAY_BUFFER, thruster_vertex_buffer);
+	
+	GLint pos_attrib = glGetAttribLocation(thruster_prog, "pos");
+	assert(pos_attrib != -1);
+	glEnableVertexAttribArray(pos_attrib);
+	glVertexAttribPointer(pos_attrib, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, 0);
+	
+	GLint color_uni = glGetUniformLocation(thruster_prog, "color");
+	GLint to_norm_uni = glGetUniformLocation(thruster_prog, "to_norm");
+	GLint trans_uni = glGetUniformLocation(thruster_prog, "transform");
+	assert(color_uni != -1);
+	assert(to_norm_uni != -1);
+	assert(trans_uni != -1);
+	
+	glUniformMatrix3fv(to_norm_uni, 1, GL_FALSE, viewport->world_to_normal);
+	
+	for(size_t i = 0; i < thruster_count; i++){
+		thruster_p thruster = &thrusters[i];
+		vec2_t p1_to_p2 = v2_sub(particles[thruster->p2_idx].pos, particles[thruster->p1_idx].pos);
+		vec2_t pos = v2_add(particles[thruster->p1_idx].pos, v2_muls(p1_to_p2, 0.5));
+		float rad = atan2f(p1_to_p2.y, p1_to_p2.x);
+		float s = sin(rad), c = cos(rad);
+		
+		glUniformMatrix3fv(trans_uni, 1, GL_TRUE, (float[9]){
+			c, -s, pos.x,
+			s, c, pos.y,
+			0, 0, 1
+		});
+		
+		if (thruster->controlled_by & THRUSTER_BACK)
+			glUniform4f(color_uni, 1, 1, 1, 1);
+		else if (thruster->controlled_by & THRUSTER_FRONT)
+			glUniform4f(color_uni, 0.5, 0.5, 0.5, 1);
+		else if (thruster->controlled_by & THRUSTER_LEFT)
+			glUniform4f(color_uni, 0.5, 0, 0, 1);
+		else
+			glUniform4f(color_uni, 0, 0.5, 0, 1);
+		
+		glDrawArrays(GL_QUADS, 0, 4);
+	}
+	
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glUseProgram(0);
+}
+
+void thruster_add(size_t p1_idx, size_t p2_idx, float force, uint8_t controlled_by){
+	thruster_count++;
+	thrusters = realloc(thrusters, sizeof(thruster_t) * thruster_count);
+	
+	thrusters[thruster_count-1] = (thruster_t){
+		.p1_idx = p1_idx,
+		.p2_idx = p2_idx,
+		.force = force,
+		.controlled_by = controlled_by
+	};
+}
+
+
+
+//
 // Renderer
 //
 void renderer_resize(uint16_t window_width, uint16_t window_height){
@@ -460,6 +599,7 @@ void renderer_draw(){
 	
 	grid_draw();
 	particles_draw();
+	thrusters_draw();
 	cursor_draw();
 }
 
@@ -469,6 +609,8 @@ void renderer_draw(){
 //
 ssize_t sim_grabbed_particle_idx = -1;
 vec2_t sim_grabbed_force = {0, 0};
+uint8_t sim_enabled_thrusters = 0;
+bool sim_turbo = false;
 
 typedef void (*particle_func_t)(particle_p particle, particle_p from);
 typedef void (*beam_func_t)(beam_p beam, particle_p from, particle_p to);
@@ -597,6 +739,26 @@ void simulate(float dt){
 	if (sim_grabbed_particle_idx != -1)
 		particles[sim_grabbed_particle_idx].force = v2_add(particles[sim_grabbed_particle_idx].force, v2_muls(sim_grabbed_force, 10));
 	
+	// Iterate over all thrusters and apply the thruster force to all connected particles
+	if (debug) printf("  thrusters: %02x\n", sim_enabled_thrusters);
+	for(size_t i = 0; i < thruster_count; i++){
+		thruster_p t = &thrusters[i];
+		//if (debug) printf("  thruster: cb %02x, et %2x result %d\n", t->controlled_by, sim_enabled_thrusters, (sim_enabled_thrusters & t->controlled_by));
+		if ( !(sim_enabled_thrusters & t->controlled_by) )
+			continue;
+		
+		vec2_t force_dir = v2_norm( v2_sub(particles[t->p2_idx].pos, particles[t->p1_idx].pos) );
+		float force_mag = t->force;
+		// Turbo only for main thrusters. Otherwise turbo rotation tares the ship apart for sure.
+		if (sim_turbo && (t->controlled_by & THRUSTER_BACK))
+			force_mag *= 3;
+		vec2_t force = v2_muls(force_dir, force_mag);
+		
+		particles[t->p1_idx].force = v2_add(particles[t->p1_idx].force, force);
+		particles[t->p2_idx].force = v2_add(particles[t->p2_idx].force, force);
+	}
+	
+	
 	// Iterate all beams and calculate the forces they exert on the particles
 	float modulus_of_elasticity = 50000; // 210e3; // 210e9; // N_m2 (elastic modulus of steel)
 	float beam_profile_area = 0.2 * 0.2; // m2
@@ -706,6 +868,7 @@ int main(int argc, char **argv){
 	grid_load();
 	cursor_load();
 	particles_load();
+	thrusters_load();
 	particles_load_model(argv[1]);
 	
 	SDL_Event e;
@@ -713,7 +876,8 @@ int main(int argc, char **argv){
 	uint32_t ticks = SDL_GetTicks();
 	
 	prog_mode_t mode = MODE_SIM;
-	particle_p selected_particle = NULL;
+	ssize_t selected_particles_idx[2] = {-1};
+	float default_thruster_force = 10;
 	
 	while (!quit) {
 		while ( SDL_PollEvent(&e) ) {
@@ -723,6 +887,41 @@ int main(int argc, char **argv){
 					break;
 				case SDL_VIDEORESIZE:
 					renderer_resize(e.resize.w, e.resize.h);
+					break;
+				case SDL_KEYDOWN:
+					switch(e.key.keysym.sym){
+						case SDLK_LEFT:
+							if (mode == MODE_EDIT) {
+								// ...
+							} else {
+								sim_enabled_thrusters |= THRUSTER_LEFT;
+							}
+							break;
+						case SDLK_RIGHT:
+							if (mode == MODE_EDIT) {
+								// ...
+							} else {
+								sim_enabled_thrusters |= THRUSTER_RIGHT;
+							}
+							break;
+						case SDLK_UP:
+							if (mode == MODE_EDIT) {
+								// ...
+							} else {
+								sim_enabled_thrusters |= THRUSTER_BACK;
+							}
+							break;
+						case SDLK_DOWN:
+							if (mode == MODE_EDIT) {
+								// ...
+							} else {
+								sim_enabled_thrusters |= THRUSTER_FRONT;
+							}
+							break;
+						case SDLK_RSHIFT: case SDLK_LSHIFT:
+							sim_turbo = true;
+							break;
+					}
 					break;
 				case SDL_KEYUP:
 					switch(e.key.keysym.sym){
@@ -739,11 +938,11 @@ int main(int argc, char **argv){
 								particles_load_model(argv[2]);
 							else
 								particles_load_model(argv[1]);
-							selected_particle = NULL;
+							selected_particles_idx[0] = -1;
+							selected_particles_idx[1] = -1;
 							break;
 						case SDLK_s:
 							particles_save_model(argv[2]);
-							selected_particle = NULL;
 							break;
 						case SDLK_m:
 							if (mode == MODE_EDIT) {
@@ -751,21 +950,65 @@ int main(int argc, char **argv){
 								printf("switched to simulation mode\n");
 							} else {
 								mode = MODE_EDIT;
-								selected_particle = NULL;
 								printf("switched to edit mode\n");
+							}
+							break;
+						case SDLK_b:  // create beam
+							particles_add_beam(&particles[selected_particles_idx[0]], &particles[selected_particles_idx[1]]);
+							printf("beam from particle %zu to %zu\n", selected_particles_idx[0], selected_particles_idx[1]);
+							goto deselect;
+							break;
+						case SDLK_n:  // select none (deselect particles)
+							deselect:
+							if (selected_particles_idx[0] != -1){
+								particles[selected_particles_idx[0]].flags &= ~PARTICLE_SELECTED;
+								selected_particles_idx[0] = -1;
+							}
+							if (selected_particles_idx[1] != -1){
+								particles[selected_particles_idx[1]].flags &= ~PARTICLE_SELECTED;
+								selected_particles_idx[1] = -1;
 							}
 							break;
 						case SDLK_d:
 							debug = !debug;
 							break;
-						case SDLK_LEFT:
-							break;
-						case SDLK_RIGHT:
+						case SDLK_c:
 							simulate(cycle_duration / 1000.0);
 							break;
+						case SDLK_LEFT:
+							if (mode == MODE_EDIT) {
+								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_LEFT);
+								goto deselect;
+							} else {
+								sim_enabled_thrusters &= ~THRUSTER_LEFT;
+							}
+							break;
+						case SDLK_RIGHT:
+							if (mode == MODE_EDIT) {
+								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_RIGHT);
+								goto deselect;
+							} else {
+								sim_enabled_thrusters &= ~THRUSTER_RIGHT;
+							}
+							break;
 						case SDLK_UP:
+							if (mode == MODE_EDIT) {
+								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_BACK);
+								goto deselect;
+							} else {
+								sim_enabled_thrusters &= ~THRUSTER_BACK;
+							}
 							break;
 						case SDLK_DOWN:
+							if (mode == MODE_EDIT) {
+								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_FRONT);
+								goto deselect;
+							} else {
+								sim_enabled_thrusters &= ~THRUSTER_FRONT;
+							}
+							break;
+						case SDLK_RSHIFT: case SDLK_LSHIFT:
+							sim_turbo = false;
 							break;
 					}
 					break;
@@ -810,6 +1053,17 @@ int main(int argc, char **argv){
 					switch(e.button.button){
 						case SDL_BUTTON_LEFT:
 							if (mode == MODE_EDIT) {
+								vec2_t world_cursor = m3_v2_mul(viewport->screen_to_world, cursor_pos);
+								closest_particle_t cp = sim_nearest_particle(world_cursor);
+								
+								if (selected_particles_idx[0] == -1) {
+									selected_particles_idx[0] = cp.index;
+									cp.particle->flags |= PARTICLE_SELECTED;
+								} else if (selected_particles_idx[1] == -1) {
+									selected_particles_idx[1] = cp.index;
+									cp.particle->flags |= PARTICLE_SELECTED;
+								}
+								/*
 								if (selected_particle == NULL) {
 									// Nothing selected yet, select closest particle
 									vec2_t world_cursor = m3_v2_mul(viewport->screen_to_world, cursor_pos);
@@ -825,6 +1079,7 @@ int main(int argc, char **argv){
 									cursor_color = (color_t){1, 1, 1, 1};
 									selected_particle = NULL;
 								}
+								*/
 							} else {
 								sim_retain_force();
 							}
@@ -880,6 +1135,7 @@ int main(int argc, char **argv){
 	}
 	
 	// Cleanup time
+	thrusters_unload();
 	particles_unload();
 	cursor_unload();
 	grid_unload();
