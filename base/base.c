@@ -465,6 +465,15 @@ void particles_draw(){
 	glUseProgram(0);
 }
 
+vec2_t particles_center(){
+	vec2_t center = {0, 0};
+	for(size_t i = 0; i < particle_count; i++){
+		center.x += particles[i].pos.x / particle_count;
+		center.y += particles[i].pos.y / particle_count;
+	}
+	return center;
+}
+
 
 //
 // Thruster
@@ -872,7 +881,7 @@ int main(int argc, char **argv){
 	particles_load_model(argv[1]);
 	
 	SDL_Event e;
-	bool quit = false, viewport_grabbed = false, paused = false;
+	bool quit = false, viewport_grabbed = false, paused = false, follow = false;
 	uint32_t ticks = SDL_GetTicks();
 	
 	prog_mode_t mode = MODE_SIM;
@@ -968,6 +977,9 @@ int main(int argc, char **argv){
 								particles[selected_particles_idx[1]].flags &= ~PARTICLE_SELECTED;
 								selected_particles_idx[1] = -1;
 							}
+							break;
+						case SDLK_f:
+							follow = !follow;
 							break;
 						case SDLK_d:
 							debug = !debug;
@@ -1121,6 +1133,11 @@ int main(int argc, char **argv){
 					}
 					break;
 			}
+		}
+		
+		if (follow){
+			viewport->pos = particles_center();
+			vp_changed(viewport);
 		}
 		
 		renderer_draw();
