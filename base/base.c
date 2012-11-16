@@ -185,6 +185,7 @@ typedef struct {
 
 #define BEAM_TRAVERSED 1<<0
 #define BEAM_FOLLOWED 1<<1
+#define BEAM_BROKEN 1<<2
 
 beam_p beams = NULL;
 size_t beam_count = 0;
@@ -436,13 +437,23 @@ void particles_draw(){
 	glUseProgram(beam_prog);
 	glBindBuffer(GL_ARRAY_BUFFER, beam_vertex_buffer);
 	
-	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 4 * beam_count, NULL, GL_STATIC_DRAW);
-	float *vertex_buffer = glMapBuffer(GL_ARRAY_BUFFER, GL_READ_WRITE);
+	size_t unbroken_beam_count = 0;
 	for(size_t i = 0; i < beam_count; i++){
-		vertex_buffer[i*4+0] = beams[i].p1->pos.x;
-		vertex_buffer[i*4+1] = beams[i].p1->pos.y;
-		vertex_buffer[i*4+2] = beams[i].p2->pos.x;
-		vertex_buffer[i*4+3] = beams[i].p2->pos.y;
+		if ( !(beams[i].flags & BEAM_BROKEN) )
+			unbroken_beam_count++;
+	}
+	
+	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 4 * unbroken_beam_count, NULL, GL_STATIC_DRAW);
+	float *vertex_buffer = glMapBuffer(GL_ARRAY_BUFFER, GL_READ_WRITE);
+	size_t vi = 0;
+	for(size_t i = 0; i < beam_count; i++){
+		if (beams[i].flags & BEAM_BROKEN)
+			continue;
+		vertex_buffer[vi*4+0] = beams[i].p1->pos.x;
+		vertex_buffer[vi*4+1] = beams[i].p1->pos.y;
+		vertex_buffer[vi*4+2] = beams[i].p2->pos.x;
+		vertex_buffer[vi*4+3] = beams[i].p2->pos.y;
+		vi++;
 		//printf("beam %zu: from %f/%f to %f/%f\n", i, beams[i].p1->pos.x, beams[i].p1->pos.y, beams[i].p2->pos.x, beams[i].p2->pos.y);
 	}
 	/*
@@ -459,7 +470,7 @@ void particles_draw(){
 	glUniform4f( glGetUniformLocation(beam_prog, "color"), 1, 1, 1, 1 );
 	glUniformMatrix3fv( glGetUniformLocation(beam_prog, "to_norm"), 1, GL_FALSE, viewport->world_to_normal);
 	
-	glDrawArrays(GL_LINES, 0, beam_count * 2);
+	glDrawArrays(GL_LINES, 0, unbroken_beam_count * 2);
 	
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glUseProgram(0);
@@ -760,7 +771,7 @@ void simulate(float dt){
 		float force_mag = t->force;
 		// Turbo only for main thrusters. Otherwise turbo rotation tares the ship apart for sure.
 		if (sim_turbo && (t->controlled_by & THRUSTER_BACK))
-			force_mag *= 3;
+			force_mag *= 5;
 		vec2_t force = v2_muls(force_dir, force_mag);
 		
 		particles[t->p1_idx].force = v2_add(particles[t->p1_idx].force, force);
@@ -771,11 +782,12 @@ void simulate(float dt){
 	// Iterate all beams and calculate the forces they exert on the particles
 	float modulus_of_elasticity = 50000; // 210e3; // 210e9; // N_m2 (elastic modulus of steel)
 	float beam_profile_area = 0.2 * 0.2; // m2
-	float deform_threshold = 20; // N
+	float deform_threshold = 0.05; // m
+	float break_threshold = 0.075; // m
 	for(size_t i = 0; i < beam_count; i++){
 		beam_p beam = &beams[i];
 		
-		if (beam == NULL)
+		if (beam->flags & BEAM_BROKEN)
 			continue;
 		
 		vec2_t p1_to_p2 = v2_sub(beam->p2->pos, beam->p1->pos);
@@ -786,7 +798,10 @@ void simulate(float dt){
 		float force = spring_constant * dilatation;
 		if (debug) printf("  beam %8.2f m, dl %6.2f m, force: %8.2f N", beam->length, dilatation, force);
 		
-		if (abs(force) > deform_threshold) {
+		if (dilatation > break_threshold) {
+			beam->flags |= BEAM_BROKEN;
+			continue;
+		} else if (dilatation > deform_threshold) {
 			beam->length -= force / (modulus_of_elasticity * beam_profile_area) * beam->length;
 			if (beam->length < 0)
 				beam->length = 0;
