@@ -878,11 +878,12 @@ enum prog_mode_e { MODE_EDIT, MODE_SIM };
 typedef enum prog_mode_e prog_mode_t;
 
 int main(int argc, char **argv){
-	if (argc != 3){
-		fprintf(stderr, "usage: %s load.mesh save.mesh\n", argv[0]);
+	if (argc != 2){
+		fprintf(stderr, "usage: %s load.mesh\n", argv[0]);
 		return 1;
 	}
 	
+	const char *save_mesh = "save.mesh";
 	uint32_t cycle_duration = 10.0; //1.0 / 60.0 * 1000;
 	uint16_t win_w = 640, win_h = 480;
 	
@@ -914,28 +915,28 @@ int main(int argc, char **argv){
 					break;
 				case SDL_KEYDOWN:
 					switch(e.key.keysym.sym){
-						case SDLK_LEFT:
+						case SDLK_a:
 							if (mode == MODE_EDIT) {
 								// ...
 							} else {
 								sim_enabled_thrusters |= THRUSTER_LEFT;
 							}
 							break;
-						case SDLK_RIGHT:
+						case SDLK_d:
 							if (mode == MODE_EDIT) {
 								// ...
 							} else {
 								sim_enabled_thrusters |= THRUSTER_RIGHT;
 							}
 							break;
-						case SDLK_UP:
+						case SDLK_w:
 							if (mode == MODE_EDIT) {
 								// ...
 							} else {
 								sim_enabled_thrusters |= THRUSTER_BACK;
 							}
 							break;
-						case SDLK_DOWN:
+						case SDLK_s:
 							if (mode == MODE_EDIT) {
 								// ...
 							} else {
@@ -959,14 +960,14 @@ int main(int argc, char **argv){
 						case SDLK_l:
 							// If shift is pressed load the save file mesh, otherwise the load file mesh
 							if ( (e.key.keysym.mod & KMOD_RSHIFT) || (e.key.keysym.mod & KMOD_LSHIFT) )
-								particles_load_model(argv[2]);
+								particles_load_model(save_mesh);
 							else
 								particles_load_model(argv[1]);
 							selected_particles_idx[0] = -1;
 							selected_particles_idx[1] = -1;
 							break;
-						case SDLK_s:
-							particles_save_model(argv[2]);
+						case SDLK_k:
+							particles_save_model(save_mesh);
 							break;
 						case SDLK_m:
 							if (mode == MODE_EDIT) {
@@ -996,13 +997,13 @@ int main(int argc, char **argv){
 						case SDLK_f:
 							follow = !follow;
 							break;
-						case SDLK_d:
+						case SDLK_v:  // verbose / debugging
 							debug = !debug;
 							break;
 						case SDLK_c:
 							simulate(cycle_duration / 1000.0);
 							break;
-						case SDLK_LEFT:
+						case SDLK_a:
 							if (mode == MODE_EDIT) {
 								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_LEFT);
 								goto deselect;
@@ -1010,7 +1011,7 @@ int main(int argc, char **argv){
 								sim_enabled_thrusters &= ~THRUSTER_LEFT;
 							}
 							break;
-						case SDLK_RIGHT:
+						case SDLK_d:
 							if (mode == MODE_EDIT) {
 								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_RIGHT);
 								goto deselect;
@@ -1018,7 +1019,7 @@ int main(int argc, char **argv){
 								sim_enabled_thrusters &= ~THRUSTER_RIGHT;
 							}
 							break;
-						case SDLK_UP:
+						case SDLK_w:
 							if (mode == MODE_EDIT) {
 								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_BACK);
 								goto deselect;
@@ -1026,7 +1027,7 @@ int main(int argc, char **argv){
 								sim_enabled_thrusters &= ~THRUSTER_BACK;
 							}
 							break;
-						case SDLK_DOWN:
+						case SDLK_s:
 							if (mode == MODE_EDIT) {
 								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_FRONT);
 								goto deselect;

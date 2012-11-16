@@ -1,0 +1,17 @@
+w a s d	Fire thrusters / place thrusters (edit mode)
+shift		Use turbo
+l		Load model
+shift + l	Load save.model
+k		Save model
+m		Toggle edit mode
+b		Create beam between selected particles (edit mode)
+n		Deselect particles (select none, edit mode)
+f		Follow particle center
+v		Verbose, show debugging info
+space	Toggle pause
+c		Perform simulation step
+
+lmb		Exert force / select particle (edit mode)
+mmb	Pan (when not following)
+rmb		Place new particle (edit mode)
+wheel	Zoom in/out
