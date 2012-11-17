@@ -16,6 +16,7 @@
 #include "common.h"
 #include "math.h"
 #include "viewport.h"
+#include "model.h"
 
 
 
@@ -40,6 +41,7 @@ Pipeline:
 // Viewport of the renderer. Data from the viewport is used by other components.
 viewport_p viewport;
 bool debug = false;
+model_p player = NULL;
 
 //
 // Grid
@@ -164,192 +166,8 @@ void cursor_draw(){
 //
 // Particles
 //
-typedef struct {
-	vec2_t pos, vel, force;  // m, m_s, m_s2
-	float mass;  // kg
-	int flags;
-} particle_t, *particle_p;
-
-#define PARTICLE_TRAVERSED 1<<0
-#define PARTICLE_SELECTED 1<<1
-
-particle_p particles = NULL;
-size_t particle_count = 0;
 GLuint particle_prog, particle_vertex_buffer;
-
-typedef struct {
-	particle_p p1, p2;
-	float length;  // m
-	int flags;
-} beam_t, *beam_p;
-
-#define BEAM_TRAVERSED 1<<0
-#define BEAM_FOLLOWED 1<<1
-#define BEAM_BROKEN 1<<2
-
-beam_p beams = NULL;
-size_t beam_count = 0;
 GLuint beam_prog, beam_vertex_buffer;
-
-// Thruster forward declaration to create thrusters when loading a model
-typedef struct {
-	size_t p1_idx, p2_idx;
-	float force;
-	uint8_t controlled_by;
-} thruster_t, *thruster_p;
-
-#define THRUSTER_BACK 1<<0
-#define THRUSTER_FRONT 1<<1
-#define THRUSTER_LEFT 1<<2
-#define THRUSTER_RIGHT 1<<3
-
-thruster_p thrusters = NULL;
-size_t thruster_count = 0;
-
-void particles_save_model(const char *filename){
-	FILE *file = fopen(filename, "w");
-	
-	for(size_t i = 0; i < particle_count; i++){
-		particle_p p = &particles[i];
-		fprintf(file, "p %f %f %f\n", p->pos.x, p->pos.y, p->mass);
-	}
-	
-	for(size_t i = 0; i < beam_count; i++){
-		beam_p beam = &beams[i];
-		
-		if (beam == NULL)
-			continue;
-		
-		fprintf(file, "b %zu %zu\n", (beam->p1 - particles), (beam->p2 - particles));
-	}
-	
-	for(size_t i = 0; i < thruster_count; i++){
-		thruster_p t = &thrusters[i];
-		fprintf(file, "t %zu %zu %f %2x\n", t->p1_idx, t->p2_idx, t->force, t->controlled_by);
-	}
-	
-	fclose(file);
-	printf("saved current mesh to %s\n", filename);
-}
-
-void particles_load_model(const char *filename){
-	const size_t line_limit = 512;
-	char line[line_limit];
-	
-	FILE* file = fopen(filename, "r");
-	
-	// First count the number of particles and beams
-	particle_count = 0;
-	beam_count = 0;
-	thruster_count = 0;
-	while( fgets(line, line_limit, file) != NULL ){
-		switch(line[0]){
-			case 'p':  // particle
-				particle_count++;
-				break;
-			case 'b': // beam
-				beam_count++;
-				break;
-			case 't': // thruster
-				thruster_count++;
-				break;
-		}
-	}
-	printf("model %s: %zu particles, %zu beams\n", filename, particle_count, beam_count);
-	
-	// Now we know how many particles and beams we need, allocate them
-	particles = realloc(particles, sizeof(particle_t) * particle_count);
-	beams = realloc(beams, sizeof(beam_t) * beam_count);
-	thrusters = realloc(thrusters, sizeof(thruster_t) * thruster_count);
-	
-	// Load the model again but this time extract the values into our particles and beams
-	rewind(file);
-	
-	size_t particle_idx = 0, beam_idx = 0, thruster_idx = 0;
-	float x, y, mass, force;
-	size_t from_idx, to_idx;
-	int controlled_by;
-	while( fgets(line, line_limit, file) != NULL ){
-		switch(line[0]){
-			case 'p':  // particle
-				if (particle_idx >= particle_count)
-					break;
-				sscanf(line, "p %f %f %f", &x, &y, &mass);
-				printf("particles[%zu] at %f %f mass %f\n", particle_idx, x, y, mass);
-				particles[particle_idx] = (particle_t){
-					.pos = (vec2_t){ x, y },
-					.vel = (vec2_t){ 0, 0 },
-					.force = (vec2_t){0, 0},
-					.mass = mass
-				};
-				particle_idx++;
-				break;
-			case 'b': // beam
-				if (beam_idx >= beam_count)
-					break;
-				sscanf(line, "b %zu %zu", &from_idx, &to_idx);
-				printf("beams[%zu] from %zu to %zu\n", beam_idx, from_idx, to_idx);
-				beams[beam_idx] = (beam_t){
-					.p1 = &particles[from_idx],
-					.p2 = &particles[to_idx],
-					.length = v2_length( v2_sub(particles[to_idx].pos, particles[from_idx].pos) )
-				};
-				beam_idx++;
-				break;
-			case 't': // thruster
-				if (thruster_idx >= thruster_count)
-					break;
-				sscanf(line, "t %zu %zu %f %x", &from_idx, &to_idx, &force, &controlled_by);
-				thrusters[thruster_idx] = (thruster_t){
-					.p1_idx = from_idx, .p2_idx = to_idx,
-					.force = force,
-					.controlled_by = controlled_by
-				};
-				thruster_idx++;
-		}
-	}
-	
-	fclose(file);
-	
-	printf("loaded mesh from %s\n", filename);
-}
-
-void particles_add(float x, float y, float mass){
-	particle_p old_particle_addr = particles;
-	
-	particle_count++;
-	particles = realloc(particles, sizeof(particle_t) * particle_count);
-	
-	particles[particle_count-1] = (particle_t){
-		.pos = (vec2_t){ x, y },
-		.vel = (vec2_t){ 0, 0 },
-		.force = (vec2_t){0, 0},
-		.mass = mass
-	};
-	
-	// Update the pointers in the beams array by calculating the old index and then a new pointer
-	for(size_t i = 0; i < beam_count; i++){
-		beam_p beam = &beams[i];
-		
-		if (beam == NULL)
-			continue;
-		
-		beam->p1 = &particles[beam->p1 - old_particle_addr];
-		beam->p2 = &particles[beam->p2 - old_particle_addr];
-	}
-}
-
-void particles_add_beam(particle_p from, particle_p to){
-	beam_count++;
-	beams = realloc(beams, sizeof(beam_t) * beam_count);
-	
-	beams[beam_count-1] = (beam_t){
-		.p1 = from,
-		.p2 = to,
-		.length = v2_length( v2_sub(to->pos, from->pos) )
-	};
-}
-
 
 void particles_load(){
 	beam_prog = load_and_link_program("unit.vs", "unit.ps");
@@ -382,12 +200,6 @@ void particles_load(){
 }
 
 void particles_unload(){
-	free(particles);
-	particles = NULL;
-	
-	free(beams);
-	beams = NULL;
-	
 	glDeleteBuffers(1, &particle_vertex_buffer);
 	delete_program_and_shaders(particle_prog);
 	
@@ -414,14 +226,14 @@ void particles_draw(){
 	
 	glUniformMatrix3fv(to_norm_uni, 1, GL_FALSE, viewport->world_to_normal);
 	
-	for(size_t i = 0; i < particle_count; i++){
+	for(size_t i = 0; i < player->particle_count; i++){
 		glUniformMatrix3fv(trans_uni, 1, GL_TRUE, (float[9]){
-			0.25, 0, particles[i].pos.x,
-			0, 0.25, particles[i].pos.y,
+			0.25, 0, player->particles[i].pos.x,
+			0, 0.25, player->particles[i].pos.y,
 			0, 0, 1
 		});
 		
-		if (particles[i].flags & PARTICLE_SELECTED)
+		if (player->particles[i].flags & PARTICLE_SELECTED)
 			glUniform4f(color_uni, 1, 0, 0, 1 );
 		else
 			glUniform4f(color_uni, 0, 1, 0, 1 );
@@ -438,28 +250,26 @@ void particles_draw(){
 	glBindBuffer(GL_ARRAY_BUFFER, beam_vertex_buffer);
 	
 	size_t unbroken_beam_count = 0;
-	for(size_t i = 0; i < beam_count; i++){
-		if ( !(beams[i].flags & BEAM_BROKEN) )
+	for(size_t i = 0; i < player->beam_count; i++){
+		if ( !(player->beams[i].flags & BEAM_BROKEN) )
 			unbroken_beam_count++;
 	}
 	
 	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 4 * unbroken_beam_count, NULL, GL_STATIC_DRAW);
 	float *vertex_buffer = glMapBuffer(GL_ARRAY_BUFFER, GL_READ_WRITE);
 	size_t vi = 0;
-	for(size_t i = 0; i < beam_count; i++){
-		if (beams[i].flags & BEAM_BROKEN)
+	for(size_t i = 0; i < player->beam_count; i++){
+		beam_p b = &player->beams[i];
+		
+		if (b->flags & BEAM_BROKEN)
 			continue;
-		vertex_buffer[vi*4+0] = beams[i].p1->pos.x;
-		vertex_buffer[vi*4+1] = beams[i].p1->pos.y;
-		vertex_buffer[vi*4+2] = beams[i].p2->pos.x;
-		vertex_buffer[vi*4+3] = beams[i].p2->pos.y;
+		
+		vertex_buffer[vi*4+0] = player->particles[b->i1].pos.x;
+		vertex_buffer[vi*4+1] = player->particles[b->i1].pos.y;
+		vertex_buffer[vi*4+2] = player->particles[b->i2].pos.x;
+		vertex_buffer[vi*4+3] = player->particles[b->i2].pos.y;
 		vi++;
-		//printf("beam %zu: from %f/%f to %f/%f\n", i, beams[i].p1->pos.x, beams[i].p1->pos.y, beams[i].p2->pos.x, beams[i].p2->pos.y);
 	}
-	/*
-	for(size_t i = 0; i < 4 * beam_count; i++)
-		printf("vb[%zu]: %f\n", i, vertex_buffer[i]);
-	*/
 	glUnmapBuffer(GL_ARRAY_BUFFER);
 	
 	pos_attrib = glGetAttribLocation(beam_prog, "pos");
@@ -476,22 +286,11 @@ void particles_draw(){
 	glUseProgram(0);
 }
 
-vec2_t particles_center(){
-	vec2_t center = {0, 0};
-	for(size_t i = 0; i < particle_count; i++){
-		center.x += particles[i].pos.x / particle_count;
-		center.y += particles[i].pos.y / particle_count;
-	}
-	return center;
-}
-
 
 //
 // Thruster
 //
-
 GLuint thruster_prog, thruster_vertex_buffer;
-
 
 void thrusters_load(){
 	thruster_prog = load_and_link_program("thruster.vs", "thruster.ps");
@@ -509,14 +308,9 @@ void thrusters_load(){
 	};
 	glBufferData(GL_ARRAY_BUFFER, sizeof(vertecies), vertecies, GL_STATIC_DRAW);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
-
 }
 
 void thrusters_unload(){
-	free(thrusters);
-	thrusters = NULL;
-	thruster_count = 0;
-	
 	glDeleteBuffers(1, &thruster_vertex_buffer);
 	delete_program_and_shaders(thruster_prog);
 }
@@ -540,10 +334,11 @@ void thrusters_draw(){
 	
 	glUniformMatrix3fv(to_norm_uni, 1, GL_FALSE, viewport->world_to_normal);
 	
-	for(size_t i = 0; i < thruster_count; i++){
-		thruster_p thruster = &thrusters[i];
-		vec2_t p1_to_p2 = v2_sub(particles[thruster->p2_idx].pos, particles[thruster->p1_idx].pos);
-		vec2_t pos = v2_add(particles[thruster->p1_idx].pos, v2_muls(p1_to_p2, 0.5));
+	for(size_t i = 0; i < player->thruster_count; i++){
+		thruster_p thruster = &player->thrusters[i];
+		
+		vec2_t p1_to_p2 = v2_sub(player->particles[thruster->i2].pos, player->particles[thruster->i1].pos);
+		vec2_t pos = v2_add(player->particles[thruster->i1].pos, v2_muls(p1_to_p2, 0.5));
 		float rad = atan2f(p1_to_p2.y, p1_to_p2.x);
 		float s = sin(rad), c = cos(rad);
 		
@@ -569,17 +364,6 @@ void thrusters_draw(){
 	glUseProgram(0);
 }
 
-void thruster_add(size_t p1_idx, size_t p2_idx, float force, uint8_t controlled_by){
-	thruster_count++;
-	thrusters = realloc(thrusters, sizeof(thruster_t) * thruster_count);
-	
-	thrusters[thruster_count-1] = (thruster_t){
-		.p1_idx = p1_idx,
-		.p2_idx = p2_idx,
-		.force = force,
-		.controlled_by = controlled_by
-	};
-}
 
 
 
@@ -632,150 +416,35 @@ vec2_t sim_grabbed_force = {0, 0};
 uint8_t sim_enabled_thrusters = 0;
 bool sim_turbo = false;
 
-typedef void (*particle_func_t)(particle_p particle, particle_p from);
-typedef void (*beam_func_t)(beam_p beam, particle_p from, particle_p to);
-
-/**
- * Do a broad iteration. That is iterate all connected beams before following the first beam to a new
- * particle. This is necessary for the forces to propagate from the start particle outwards. Otherwise
- * a depth first iteration might finish most particles "from behind" missing most of the forces caused
- * by the initial particle.
- */
-void sim_traverse_particles(particle_p p, particle_func_t particle_func){
-	assert(p != NULL && particle_func != NULL);
-	
-	particle_func(p, NULL);
-	p->flags |= PARTICLE_TRAVERSED;
-	
-	size_t traversed_particles;
-	do {
-		traversed_particles = 0;
-		
-		for(size_t i = 0; i < beam_count; i++){
-			beam_p beam = &beams[i];
-			
-			if ( (beam->p1->flags & PARTICLE_TRAVERSED) && !(beam->p2->flags & PARTICLE_TRAVERSED) ) {
-				particle_func(beam->p2, beam->p1);
-				beam->p2->flags |= PARTICLE_TRAVERSED;
-				traversed_particles++;
-			} else if ( (beam->p2->flags & PARTICLE_TRAVERSED) && !(beam->p1->flags & PARTICLE_TRAVERSED) ) {
-				particle_func(beam->p1, beam->p2);
-				beam->p1->flags |= PARTICLE_TRAVERSED;
-				traversed_particles++;
-			}
-		}
-	} while (traversed_particles > 0);
-	
-	/*
-	for(size_t i = 0; i < beam_count; i++){
-		beam_p beam = &beams[i];
-		if ( (beam->flags & BEAM_TRAVERSED) == 0 ) {
-			if (beam->p1 == p) {
-				beam_func(beam, p, beam->p2);
-				beam->flags |= BEAM_TRAVERSED;
-			} else if (beam->p2 == p) {
-				beam_func(beam, p, beam->p1);
-				beam->flags |= BEAM_TRAVERSED;
-			}
-		}
-	}
-	
-	for(size_t i = 0; i < beam_count; i++){
-		beam_p beam = &beams[i];
-		if ( ((beam->flags & BEAM_FOLLOWED) == 0) && (beam->p1 == p || beam->p2 == p) ){
-			beam->flags |= BEAM_FOLLOWED;
-			sim_traverse( (beam->p1 == p ? beam->p2 : beam->p1), beam_func, particle_func);
-		}
-	}
-	
-	particle_func(p);
-	*/
-}
-
-void sim_traverse_beams(particle_p p, bool mark, beam_func_t beam_func){
-	assert(p != NULL && beam_func != NULL);
-	
-	for(size_t i = 0; i < beam_count; i++){
-		beam_p beam = &beams[i];
-		if ( !(beam->flags & BEAM_TRAVERSED) ) {
-			if (beam->p1 == p) {
-				beam_func(beam, p, beam->p2);
-				if (mark)
-					beam->flags |= BEAM_TRAVERSED;
-			} else if (beam->p2 == p) {
-				beam_func(beam, p, beam->p1);
-				if (mark)
-					beam->flags |= BEAM_TRAVERSED;
-			}
-		}
-	}	
-}
-
-void sim_clear_traverse_flags(){
-	for(size_t i = 0; i < beam_count; i++)
-		beams[i].flags = 0;
-	for(size_t i = 0; i < particle_count; i++)
-		particles[i].flags = 0;
-}
-
-void sim_propagate_forces(){
-	sim_clear_traverse_flags();
-	
-	void particle_func(particle_p particle, particle_p particle_from){
-		printf("iterating particle %p\n", particle);
-		
-		float scalar_sum = 0;
-		void scalar_summer(beam_p beam, particle_p from, particle_p to){
-			scalar_sum += v2_sprod( v2_norm(v2_sub(to->pos, from->pos)), v2_norm(particle->force) );
-		}
-		sim_traverse_beams(particle, false, scalar_summer);
-		printf("scalar sum: %f\n", scalar_sum);
-		
-		if (scalar_sum > 0){
-			void beam_func(beam_p beam, particle_p from, particle_p to){
-				printf("iterating beam from %p to %p\n", from, to);
-				float proj = v2_sprod( v2_norm(v2_sub(to->pos, from->pos)), v2_norm(particle->force) );
-				to->force = v2_muls(particle->force, proj / scalar_sum);
-			}
-			sim_traverse_beams(particle, true, beam_func);
-		}
-		
-		if (particle_from != NULL)
-			particle->force = particle_from->force;
-	}
-	
-	sim_traverse_particles(&particles[sim_grabbed_particle_idx], particle_func);
-}
-
 /**
  * dt in seconds.
  */
 void simulate(float dt){
 	if (debug) printf("step with dt %fs\n", dt);
 	
-	for(size_t i = 0; i < particle_count; i++)
-		particles[i].force = (vec2_t){0, 0};
+	//for(size_t i = 0; i < player->particle_count; i++)
+	//	player->particles[i].force = (vec2_t){0, 0};
 	
 	if (sim_grabbed_particle_idx != -1)
-		particles[sim_grabbed_particle_idx].force = v2_add(particles[sim_grabbed_particle_idx].force, v2_muls(sim_grabbed_force, 10));
+		player->particles[sim_grabbed_particle_idx].force = v2_add(player->particles[sim_grabbed_particle_idx].force, v2_muls(sim_grabbed_force, 10));
 	
 	// Iterate over all thrusters and apply the thruster force to all connected particles
 	if (debug) printf("  thrusters: %02x\n", sim_enabled_thrusters);
-	for(size_t i = 0; i < thruster_count; i++){
-		thruster_p t = &thrusters[i];
+	for(size_t i = 0; i < player->thruster_count; i++){
+		thruster_p t = &player->thrusters[i];
 		//if (debug) printf("  thruster: cb %02x, et %2x result %d\n", t->controlled_by, sim_enabled_thrusters, (sim_enabled_thrusters & t->controlled_by));
 		if ( !(sim_enabled_thrusters & t->controlled_by) )
 			continue;
 		
-		vec2_t force_dir = v2_norm( v2_sub(particles[t->p2_idx].pos, particles[t->p1_idx].pos) );
+		vec2_t force_dir = v2_norm( v2_sub(player->particles[t->i2].pos, player->particles[t->i1].pos) );
 		float force_mag = t->force;
 		// Turbo only for main thrusters. Otherwise turbo rotation tares the ship apart for sure.
 		if (sim_turbo && (t->controlled_by & THRUSTER_BACK))
 			force_mag *= 5;
 		vec2_t force = v2_muls(force_dir, force_mag);
 		
-		particles[t->p1_idx].force = v2_add(particles[t->p1_idx].force, force);
-		particles[t->p2_idx].force = v2_add(particles[t->p2_idx].force, force);
+		player->particles[t->i1].force = v2_add(player->particles[t->i1].force, force);
+		player->particles[t->i2].force = v2_add(player->particles[t->i2].force, force);
 	}
 	
 	
@@ -784,13 +453,13 @@ void simulate(float dt){
 	float beam_profile_area = 0.2 * 0.2; // m2
 	float deform_threshold = 0.05; // m
 	float break_threshold = 0.075; // m
-	for(size_t i = 0; i < beam_count; i++){
-		beam_p beam = &beams[i];
+	for(size_t i = 0; i < player->beam_count; i++){
+		beam_p beam = &player->beams[i];
 		
 		if (beam->flags & BEAM_BROKEN)
 			continue;
 		
-		vec2_t p1_to_p2 = v2_sub(beam->p2->pos, beam->p1->pos);
+		vec2_t p1_to_p2 = v2_sub(player->particles[beam->i2].pos, player->particles[beam->i1].pos);
 		float p1_to_p2_len = v2_length(p1_to_p2);
 		
 		float dilatation = beam->length - p1_to_p2_len;
@@ -810,18 +479,18 @@ void simulate(float dt){
 		if (debug) printf("\n");
 		
 		vec2_t p1_to_p2_norm = v2_divs(p1_to_p2, p1_to_p2_len);
-		beam->p1->force = v2_add(beam->p1->force, v2_muls(p1_to_p2_norm, -force));
-		beam->p2->force = v2_add(beam->p2->force, v2_muls(p1_to_p2_norm, force));
+		player->particles[beam->i1].force = v2_add(player->particles[beam->i1].force, v2_muls(p1_to_p2_norm, -force));
+		player->particles[beam->i2].force = v2_add(player->particles[beam->i2].force, v2_muls(p1_to_p2_norm, force));
 	}
 	
 	// Iterate over all particles to advance to the next time step. Delete all forces afterwards.
-	for(size_t i = 0; i < particle_count; i++){
+	for(size_t i = 0; i < player->particle_count; i++){
 		/*
 		a = f / m;
 		v = v + a * dt;
 		s = s + v * dt;
 		*/
-		particle_p p = &particles[i];
+		particle_p p = &player->particles[i];
 		
 		vec2_t acl;
 		acl.x = p->force.x / p->mass;
@@ -846,8 +515,8 @@ closest_particle_t sim_nearest_particle(vec2_t pos){
 	size_t closest_idx = 0;
 	float closest_dist = INFINITY;
 	vec2_t to_closest;
-	for(size_t i = 0; i < particle_count; i++){
-		vec2_t to_particle = v2_sub(particles[i].pos, pos);
+	for(size_t i = 0; i < player->particle_count; i++){
+		vec2_t to_particle = v2_sub(player->particles[i].pos, pos);
 		float dist = v2_length(to_particle);
 		if (dist < closest_dist){
 			closest_idx = i;
@@ -856,7 +525,7 @@ closest_particle_t sim_nearest_particle(vec2_t pos){
 		}
 	}
 	
-	return (closest_particle_t){ &particles[closest_idx], closest_idx, closest_dist, to_closest };
+	return (closest_particle_t){ &player->particles[closest_idx], closest_idx, closest_dist, to_closest };
 }
 
 void sim_apply_force(){
@@ -873,6 +542,7 @@ void sim_retain_force(){
 	sim_grabbed_particle_idx = -1;
 	sim_grabbed_force = (vec2_t){0, 0};
 }
+
 
 enum prog_mode_e { MODE_EDIT, MODE_SIM };
 typedef enum prog_mode_e prog_mode_t;
@@ -894,7 +564,9 @@ int main(int argc, char **argv){
 	cursor_load();
 	particles_load();
 	thrusters_load();
-	particles_load_model(argv[1]);
+	
+	player = model_new();
+	model_load(player, argv[1]);
 	
 	SDL_Event e;
 	bool quit = false, viewport_grabbed = false, paused = false, follow = false;
@@ -960,14 +632,14 @@ int main(int argc, char **argv){
 						case SDLK_l:
 							// If shift is pressed load the save file mesh, otherwise the load file mesh
 							if ( (e.key.keysym.mod & KMOD_RSHIFT) || (e.key.keysym.mod & KMOD_LSHIFT) )
-								particles_load_model(save_mesh);
+								model_load(player, save_mesh);
 							else
-								particles_load_model(argv[1]);
+								model_load(player, argv[1]);
 							selected_particles_idx[0] = -1;
 							selected_particles_idx[1] = -1;
 							break;
 						case SDLK_k:
-							particles_save_model(save_mesh);
+							model_save(player, save_mesh);
 							break;
 						case SDLK_m:
 							if (mode == MODE_EDIT) {
@@ -979,18 +651,18 @@ int main(int argc, char **argv){
 							}
 							break;
 						case SDLK_b:  // create beam
-							particles_add_beam(&particles[selected_particles_idx[0]], &particles[selected_particles_idx[1]]);
+							model_add_beam(player, selected_particles_idx[0], selected_particles_idx[1]);
 							printf("beam from particle %zu to %zu\n", selected_particles_idx[0], selected_particles_idx[1]);
 							goto deselect;
 							break;
 						case SDLK_n:  // select none (deselect particles)
 							deselect:
 							if (selected_particles_idx[0] != -1){
-								particles[selected_particles_idx[0]].flags &= ~PARTICLE_SELECTED;
+								player->particles[selected_particles_idx[0]].flags &= ~PARTICLE_SELECTED;
 								selected_particles_idx[0] = -1;
 							}
 							if (selected_particles_idx[1] != -1){
-								particles[selected_particles_idx[1]].flags &= ~PARTICLE_SELECTED;
+								player->particles[selected_particles_idx[1]].flags &= ~PARTICLE_SELECTED;
 								selected_particles_idx[1] = -1;
 							}
 							break;
@@ -1005,7 +677,7 @@ int main(int argc, char **argv){
 							break;
 						case SDLK_a:
 							if (mode == MODE_EDIT) {
-								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_LEFT);
+								model_add_thruster(player, selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_LEFT);
 								goto deselect;
 							} else {
 								sim_enabled_thrusters &= ~THRUSTER_LEFT;
@@ -1013,7 +685,7 @@ int main(int argc, char **argv){
 							break;
 						case SDLK_d:
 							if (mode == MODE_EDIT) {
-								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_RIGHT);
+								model_add_thruster(player, selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_RIGHT);
 								goto deselect;
 							} else {
 								sim_enabled_thrusters &= ~THRUSTER_RIGHT;
@@ -1021,7 +693,7 @@ int main(int argc, char **argv){
 							break;
 						case SDLK_w:
 							if (mode == MODE_EDIT) {
-								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_BACK);
+								model_add_thruster(player, selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_BACK);
 								goto deselect;
 							} else {
 								sim_enabled_thrusters &= ~THRUSTER_BACK;
@@ -1029,7 +701,7 @@ int main(int argc, char **argv){
 							break;
 						case SDLK_s:
 							if (mode == MODE_EDIT) {
-								thruster_add(selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_FRONT);
+								model_add_thruster(player, selected_particles_idx[0], selected_particles_idx[1], default_thruster_force, THRUSTER_FRONT);
 								goto deselect;
 							} else {
 								sim_enabled_thrusters &= ~THRUSTER_FRONT;
@@ -1119,7 +791,7 @@ int main(int argc, char **argv){
 							if (mode == MODE_EDIT) {
 								// Create new particle at world pos
 								vec2_t world_cursor = m3_v2_mul(viewport->screen_to_world, cursor_pos);
-								particles_add(world_cursor.x, world_cursor.y, 1);
+								model_add_particle(player, world_cursor.x, world_cursor.y, 1);
 							}
 							break;
 						case SDL_BUTTON_WHEELUP:
@@ -1152,7 +824,7 @@ int main(int argc, char **argv){
 		}
 		
 		if (follow){
-			viewport->pos = particles_center();
+			viewport->pos = model_particle_center(player);
 			vp_changed(viewport);
 		}
 		
@@ -1168,6 +840,7 @@ int main(int argc, char **argv){
 	}
 	
 	// Cleanup time
+	model_destroy(player);
 	thrusters_unload();
 	particles_unload();
 	cursor_unload();
