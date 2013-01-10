@@ -449,10 +449,10 @@ void simulate(float dt){
 	
 	
 	// Iterate all beams and calculate the forces they exert on the particles
-	float modulus_of_elasticity = 50000; // 210e3; // 210e9; // N_m2 (elastic modulus of steel)
-	float beam_profile_area = 0.2 * 0.2; // m2
-	float deform_threshold = 0.05; // m
-	float break_threshold = 0.075; // m
+	float modulus_of_elasticity = player->modulus_of_elasticity; // 210e3; // 210e9; // N_m2 (elastic modulus of steel)
+	float beam_profile_area = player->beam_profile_area; // m2
+	float deform_threshold = player->deform_threshold; // m
+	float break_threshold = player->break_threshold; // m
 	for(size_t i = 0; i < player->beam_count; i++){
 		beam_p beam = &player->beams[i];
 		

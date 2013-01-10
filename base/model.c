@@ -91,6 +91,12 @@ void model_load(model_p model, const char *filename){
 		return;
 	}
 	
+	// Init global model params
+	model->modulus_of_elasticity = 50000;  // N_m2 (elastic modulus of steel)
+	model->beam_profile_area = 0.2 * 0.2; // m2
+	model->deform_threshold = 0.05; // m
+	model->break_threshold = 0.075; // m
+	
 	// First count the number of each element type
 	model->particle_count = 0;
 	model->beam_count = 0;
@@ -122,12 +128,17 @@ void model_load(model_p model, const char *filename){
 	rewind(file);
 	
 	size_t particle_idx = 0, beam_idx = 0, thruster_idx = 0;
+	float global_mass = 1, thruster_force = 10;
 	float x, y, mass, force;
 	size_t i1, i2;
 	int controlled_by;
 	
 	while( fgets(line, line_limit, file) != NULL ){
 		switch(line[0]){
+			case 'g':  // global model properties
+				sscanf(line, "g %f %f %f %f %f %f", &model->modulus_of_elasticity, &model->beam_profile_area,
+					&model->deform_threshold, &model->break_threshold, &global_mass, &thruster_force);
+				break;
 			case 'p':  // particle
 				if (particle_idx >= model->particle_count)
 					break;
@@ -137,7 +148,7 @@ void model_load(model_p model, const char *filename){
 					.pos = (vec2_t){ x, y },
 					.vel = (vec2_t){ 0, 0 },
 					.force = (vec2_t){0, 0},
-					.mass = mass
+					.mass = global_mass //mass
 				};
 				particle_idx++;
 				break;
@@ -160,7 +171,7 @@ void model_load(model_p model, const char *filename){
 					thruster_idx, i1, i2, force, controlled_by);
 				model->thrusters[thruster_idx] = (thruster_t){
 					.i1 = i1, .i2 = i2,
-					.force = force,
+					.force = thruster_force, //force,
 					.controlled_by = controlled_by
 				};
 				thruster_idx++;

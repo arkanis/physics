@@ -47,6 +47,7 @@ typedef struct {
 
 
 typedef struct {
+	float modulus_of_elasticity, beam_profile_area, deform_threshold, break_threshold;
 	size_t particle_count, beam_count, thruster_count;
 	particle_p particles;
 	beam_p beams;
